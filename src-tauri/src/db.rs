@@ -465,6 +465,14 @@ mod tests {
         assert_eq!(portfolios[0].wallets.len(), 1);
         assert_eq!(portfolios[0].wallets[0].label, "Ledger");
         assert_eq!(portfolios[0].wallets[0].wallet_type, "address");
+        let serialized = serde_json::to_value(&portfolios[0].wallets[0]).expect("wallet JSON");
+        assert!(serialized.get("address").is_none());
+        assert_eq!(
+            serialized
+                .get("displayAddress")
+                .and_then(|value| value.as_str()),
+            Some("0x0000000000000000000000000000000000000000")
+        );
     }
 
     #[test]
