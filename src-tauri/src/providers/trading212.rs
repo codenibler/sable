@@ -107,10 +107,16 @@ async fn get(
 }
 
 fn api_url(config: &Config, path: &str) -> String {
-    let base = config.trading212_base_url.trim_end_matches('/');
+    join_api_url(&config.trading212_base_url, path)
+}
+
+fn join_api_url(base_url: &str, path: &str) -> String {
+    let base = base_url.trim_end_matches('/');
     if path.starts_with("/api/v0/") {
         let origin = base.strip_suffix("/api/v0").unwrap_or(base);
         format!("{origin}{path}")
+    } else if !path.starts_with('/') {
+        format!("{base}/equity/history/transactions?{path}")
     } else {
         format!("{base}{path}")
     }
@@ -217,5 +223,27 @@ fn network_error(error: reqwest::Error) -> String {
         "The data provider timed out".to_string()
     } else {
         "Could not reach the data provider".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::join_api_url;
+
+    #[test]
+    fn accepts_all_observed_pagination_path_shapes() {
+        let base = "https://live.trading212.com/api/v0";
+        assert_eq!(
+            join_api_url(base, "/equity/history/transactions?limit=50"),
+            "https://live.trading212.com/api/v0/equity/history/transactions?limit=50"
+        );
+        assert_eq!(
+            join_api_url(base, "/api/v0/equity/history/transactions?limit=50"),
+            "https://live.trading212.com/api/v0/equity/history/transactions?limit=50"
+        );
+        assert_eq!(
+            join_api_url(base, "limit=50&cursor=123"),
+            "https://live.trading212.com/api/v0/equity/history/transactions?limit=50&cursor=123"
+        );
     }
 }
