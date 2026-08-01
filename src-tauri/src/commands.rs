@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Mutex};
 
-use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Utc};
 use reqwest::Client;
 use rusqlite::Connection;
 use tauri::State;
@@ -9,8 +9,8 @@ use crate::{
     config::Config,
     db,
     models::{
-        AddWalletInput, CryptoPortfolio, Dashboard, HistorySyncState, Holding, PeriodReturn,
-        SourceSummary,
+        AddWalletInput, CryptoPortfolio, Dashboard, HistorySyncState, Holding, MonthlyWinnings,
+        PeriodReturn, SourceSummary,
     },
     providers::{crypto, trading212},
 };
@@ -21,6 +21,8 @@ pub struct AppState {
     pub config: Config,
     pub history_sync: tokio::sync::Mutex<()>,
 }
+
+const OPESSOCIUS_SOURCE: &str = "opessocius";
 
 #[tauri::command]
 pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, String> {
@@ -38,6 +40,17 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
         db::cash_history_summary(&database)?
     };
+    let opessocius_winnings = {
+        let database = state.database.lock().map_err(|_| "Database lock failed")?;
+        db::monthly_winnings(&database, OPESSOCIUS_SOURCE)?
+    };
+    let total_opessocius_winnings: f64 = opessocius_winnings.iter().map(|(_, amount)| amount).sum();
+    let (previous_month_start, previous_month_label) = previous_month(Local::now())?;
+    let previous_month_amount = opessocius_winnings
+        .iter()
+        .find(|(month, _)| month == &previous_month_start)
+        .map(|(_, amount)| *amount)
+        .unwrap_or_default();
     let trading_result = if state.config.trading212_is_configured() {
         trading212::fetch_overview(&state.client, &state.config).await
     } else {
@@ -127,7 +140,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         }
     };
 
-    let opessocius_value = state.config.opessocius_current_balance;
+    let opessocius_value = state.config.opessocius_current_balance + total_opessocius_winnings;
     let opessocius_invested = state.config.opessocius_net_deposits;
     let opessocius_return = opessocius_value - opessocius_invested;
     sources.push(SourceSummary {
@@ -137,7 +150,10 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         value: opessocius_value,
         return_value: opessocius_return,
         connected: true,
-        message: Some("trading firm".to_string()),
+        message: Some(format!(
+            "trading firm · {} winnings recorded",
+            opessocius_winnings.len()
+        )),
     });
     holdings.push(Holding {
         id: "manual-opessocius".to_string(),
@@ -173,6 +189,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                 portfolio.id,
                 portfolio.value,
                 baseline,
+                0.0,
                 state.config.snapshot_interval_minutes,
             )?;
             crypto_value += portfolio.value;
@@ -222,6 +239,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
             0,
             total_value,
             invested_value,
+            total_opessocius_winnings,
             state.config.snapshot_interval_minutes,
         )?;
     }
@@ -254,12 +272,35 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         .single()
         .map(|date| date.with_timezone(&Utc).to_rfc3339())
         .ok_or("Could not determine the start of the current year")?;
-    let (history, monthly_return, yearly_return) = {
+    let period_end = Utc::now();
+    let month_start_time = month_start
+        .parse::<DateTime<Utc>>()
+        .map_err(|_| "Could not parse the start of the current month")?;
+    let year_start_time = year_start
+        .parse::<DateTime<Utc>>()
+        .map_err(|_| "Could not parse the start of the current year")?;
+    let distributed_monthly =
+        distributed_winnings(&opessocius_winnings, month_start_time, period_end)?;
+    let distributed_yearly =
+        distributed_winnings(&opessocius_winnings, year_start_time, period_end)?;
+    let (mut history, monthly_return, yearly_return) = {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
-        let monthly =
-            db::simple_return_since(&database, &month_start, total_return, contribution_basis)?;
-        let yearly =
-            db::simple_return_since(&database, &year_start, total_return, contribution_basis)?;
+        let monthly = db::simple_return_since(
+            &database,
+            &month_start,
+            total_return,
+            contribution_basis,
+            total_opessocius_winnings,
+            distributed_monthly,
+        )?;
+        let yearly = db::simple_return_since(
+            &database,
+            &year_start,
+            total_return,
+            contribution_basis,
+            total_opessocius_winnings,
+            distributed_yearly,
+        )?;
         (
             db::total_history(&database)?,
             PeriodReturn {
@@ -272,6 +313,14 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
             },
         )
     };
+    for point in &mut history {
+        let timestamp = point
+            .timestamp
+            .parse::<DateTime<Utc>>()
+            .map_err(|_| "Stored portfolio history contains an invalid timestamp")?;
+        let accrued = accrued_winnings(&opessocius_winnings, timestamp)?;
+        point.value = point.value - point.opessocius_winnings + accrued;
+    }
 
     Ok(Dashboard {
         total_value,
@@ -285,6 +334,11 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         },
         monthly_return,
         yearly_return,
+        opessocius_previous_month: MonthlyWinnings {
+            month: previous_month_start,
+            label: previous_month_label,
+            amount: previous_month_amount,
+        },
         net_contributions: cash_history.net_contributions + opessocius_invested,
         history_event_count: cash_history.event_count,
         history_backfill_complete: cash_history.backfill_complete,
@@ -364,6 +418,92 @@ fn history_sync_is_due(state: &HistorySyncState, interval_minutes: i64) -> bool 
         .is_none_or(|last_sync| Utc::now() - last_sync >= Duration::minutes(interval_minutes))
 }
 
+fn previous_month(now: DateTime<Local>) -> Result<(String, String), String> {
+    let current_month = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
+        .ok_or("Could not determine the current month")?;
+    let previous = current_month - Duration::days(1);
+    let start = NaiveDate::from_ymd_opt(previous.year(), previous.month(), 1)
+        .ok_or("Could not determine the previous month")?;
+    Ok((
+        start.format("%Y-%m-%d").to_string(),
+        start.format("%B %Y").to_string(),
+    ))
+}
+
+fn month_bounds(month_start: &str) -> Result<(DateTime<Utc>, DateTime<Utc>), String> {
+    let start_date = NaiveDate::parse_from_str(month_start, "%Y-%m-%d")
+        .map_err(|_| "Stored monthly winnings contain an invalid month")?;
+    let (next_year, next_month) = if start_date.month() == 12 {
+        (start_date.year() + 1, 1)
+    } else {
+        (start_date.year(), start_date.month() + 1)
+    };
+    let end_date = NaiveDate::from_ymd_opt(next_year, next_month, 1)
+        .ok_or("Stored monthly winnings contain an invalid month")?;
+    let start = Local
+        .from_local_datetime(
+            &start_date
+                .and_hms_opt(0, 0, 0)
+                .ok_or("Could not determine monthly winnings start")?,
+        )
+        .single()
+        .ok_or("Could not determine monthly winnings start")?
+        .with_timezone(&Utc);
+    let end = Local
+        .from_local_datetime(
+            &end_date
+                .and_hms_opt(0, 0, 0)
+                .ok_or("Could not determine monthly winnings end")?,
+        )
+        .single()
+        .ok_or("Could not determine monthly winnings end")?
+        .with_timezone(&Utc);
+    Ok((start, end))
+}
+
+fn accrued_winnings(entries: &[(String, f64)], at: DateTime<Utc>) -> Result<f64, String> {
+    entries.iter().try_fold(0.0, |total, (month, amount)| {
+        Ok(total + accrued_monthly_winnings(month, *amount, at)?)
+    })
+}
+
+fn distributed_winnings(
+    entries: &[(String, f64)],
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+) -> Result<f64, String> {
+    entries.iter().try_fold(0.0, |total, (month, amount)| {
+        Ok(total + accrued_monthly_winnings(month, *amount, end)?
+            - accrued_monthly_winnings(month, *amount, start)?)
+    })
+}
+
+fn accrued_monthly_winnings(month: &str, amount: f64, at: DateTime<Utc>) -> Result<f64, String> {
+    let (start, end) = month_bounds(month)?;
+    if at <= start {
+        return Ok(0.0);
+    }
+    if at >= end {
+        return Ok(amount);
+    }
+    let elapsed = (at - start).num_seconds() as f64;
+    let duration = (end - start).num_seconds() as f64;
+    Ok(amount * elapsed / duration)
+}
+
+#[tauri::command]
+pub fn set_opessocius_previous_month_winnings(
+    state: State<'_, AppState>,
+    amount: f64,
+) -> Result<(), String> {
+    if !amount.is_finite() || amount < 0.0 {
+        return Err("Winnings must be a non-negative amount".to_string());
+    }
+    let (month_start, _) = previous_month(Local::now())?;
+    let database = state.database.lock().map_err(|_| "Database lock failed")?;
+    db::save_monthly_winnings(&database, OPESSOCIUS_SOURCE, &month_start, amount)
+}
+
 #[tauri::command]
 pub fn list_crypto_portfolios(state: State<'_, AppState>) -> Result<Vec<CryptoPortfolio>, String> {
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
@@ -400,4 +540,33 @@ pub fn add_wallet(state: State<'_, AppState>, input: AddWalletInput) -> Result<i
 pub fn remove_wallet(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
     db::remove_wallet(&database, id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{accrued_monthly_winnings, distributed_winnings, month_bounds, previous_month};
+    use chrono::{Local, TimeZone};
+
+    #[test]
+    fn identifies_the_previous_calendar_month() {
+        let now = Local
+            .with_ymd_and_hms(2026, 1, 15, 12, 0, 0)
+            .single()
+            .expect("local date");
+        let (month, label) = previous_month(now).unwrap();
+        assert_eq!(month, "2025-12-01");
+        assert_eq!(label, "December 2025");
+    }
+
+    #[test]
+    fn distributes_winnings_across_the_full_month() {
+        let (start, end) = month_bounds("2026-07-01").unwrap();
+        let midpoint = start + (end - start) / 2;
+        let accrued = accrued_monthly_winnings("2026-07-01", 310.0, midpoint).unwrap();
+        assert!((accrued - 155.0).abs() < 0.000_001);
+
+        let entries = vec![("2026-07-01".to_string(), 310.0)];
+        assert_eq!(distributed_winnings(&entries, start, end).unwrap(), 310.0);
+        assert_eq!(distributed_winnings(&entries, end, end).unwrap(), 0.0);
+    }
 }

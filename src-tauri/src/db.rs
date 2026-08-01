@@ -41,7 +41,8 @@ fn initialize(connection: &Connection) -> Result<(), String> {
                 source_id INTEGER NOT NULL DEFAULT 0,
                 captured_at TEXT NOT NULL,
                 value_eur REAL NOT NULL,
-                invested_eur REAL NOT NULL
+                invested_eur REAL NOT NULL,
+                opessocius_winnings_eur REAL NOT NULL DEFAULT 0
              );
              CREATE INDEX IF NOT EXISTS snapshots_source_time
                 ON snapshots(source_kind, source_id, captured_at);
@@ -61,6 +62,14 @@ fn initialize(connection: &Connection) -> Result<(), String> {
                 next_path TEXT,
                 backfill_complete INTEGER NOT NULL DEFAULT 0,
                 last_synced_at TEXT
+             );
+             CREATE TABLE IF NOT EXISTS manual_monthly_winnings (
+                source TEXT NOT NULL,
+                month_start TEXT NOT NULL,
+                amount_eur REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(source, month_start)
              );",
         )
         .map_err(to_string)?;
@@ -79,6 +88,10 @@ fn initialize(connection: &Connection) -> Result<(), String> {
     add_column_if_missing(
         connection,
         "ALTER TABLE wallets ADD COLUMN last_checked_at TEXT",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ALTER TABLE snapshots ADD COLUMN opessocius_winnings_eur REAL NOT NULL DEFAULT 0",
     )?;
     Ok(())
 }
@@ -333,6 +346,7 @@ pub fn save_snapshot(
     source_id: i64,
     value: f64,
     invested: f64,
+    opessocius_winnings: f64,
     interval_minutes: i64,
 ) -> Result<(), String> {
     let last: Option<(i64, String)> = connection
@@ -357,17 +371,30 @@ pub fn save_snapshot(
     if let Some(id) = recent_id {
         connection
             .execute(
-                "UPDATE snapshots SET captured_at = ?1, value_eur = ?2, invested_eur = ?3
-                 WHERE id = ?4",
-                params![Utc::now().to_rfc3339(), value, invested, id],
+                "UPDATE snapshots SET captured_at = ?1, value_eur = ?2, invested_eur = ?3,
+                        opessocius_winnings_eur = ?4 WHERE id = ?5",
+                params![
+                    Utc::now().to_rfc3339(),
+                    value,
+                    invested,
+                    opessocius_winnings,
+                    id
+                ],
             )
             .map_err(to_string)?;
     } else {
         connection
             .execute(
-                "INSERT INTO snapshots(source_kind, source_id, captured_at, value_eur, invested_eur)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![source_kind, source_id, Utc::now().to_rfc3339(), value, invested],
+                "INSERT INTO snapshots(source_kind, source_id, captured_at, value_eur, invested_eur,
+                        opessocius_winnings_eur) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    source_kind,
+                    source_id,
+                    Utc::now().to_rfc3339(),
+                    value,
+                    invested,
+                    opessocius_winnings
+                ],
             )
             .map_err(to_string)?;
     }
@@ -377,7 +404,7 @@ pub fn save_snapshot(
 pub fn total_history(connection: &Connection) -> Result<Vec<DataPoint>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT captured_at, value_eur, invested_eur FROM snapshots
+            "SELECT captured_at, value_eur, invested_eur, opessocius_winnings_eur FROM snapshots
              WHERE source_kind = 'total' ORDER BY captured_at DESC LIMIT 500",
         )
         .map_err(to_string)?;
@@ -387,6 +414,7 @@ pub fn total_history(connection: &Connection) -> Result<Vec<DataPoint>, String> 
                 timestamp: row.get(0)?,
                 value: row.get(1)?,
                 invested: row.get(2)?,
+                opessocius_winnings: row.get(3)?,
             })
         })
         .map_err(to_string)?
@@ -401,25 +429,66 @@ pub fn simple_return_since(
     since: &str,
     current_return: f64,
     current_invested: f64,
+    current_opessocius_winnings: f64,
+    distributed_opessocius_return: f64,
 ) -> Result<(f64, f64), String> {
     let starting_return = connection
         .query_row(
-            "SELECT value_eur - invested_eur FROM snapshots
+            "SELECT value_eur - invested_eur, opessocius_winnings_eur FROM snapshots
              WHERE source_kind = 'total' AND captured_at >= ?1
              ORDER BY captured_at LIMIT 1",
             [since],
-            |row| row.get::<_, f64>(0),
+            |row| Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?)),
         )
         .optional()
         .map_err(to_string)?
-        .unwrap_or(current_return);
-    let amount = current_return - starting_return;
+        .unwrap_or((current_return, current_opessocius_winnings));
+    let amount = (current_return - current_opessocius_winnings)
+        - (starting_return.0 - starting_return.1)
+        + distributed_opessocius_return;
     let percent = if current_invested > 0.0 {
         amount / current_invested * 100.0
     } else {
         0.0
     };
     Ok((amount, percent))
+}
+
+pub fn save_monthly_winnings(
+    connection: &Connection,
+    source: &str,
+    month_start: &str,
+    amount: f64,
+) -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    connection
+        .execute(
+            "INSERT INTO manual_monthly_winnings(source, month_start, amount_eur, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(source, month_start) DO UPDATE SET
+                amount_eur = excluded.amount_eur,
+                updated_at = excluded.updated_at",
+            params![source, month_start, amount, now],
+        )
+        .map_err(to_string)?;
+    Ok(())
+}
+
+pub fn monthly_winnings(
+    connection: &Connection,
+    source: &str,
+) -> Result<Vec<(String, f64)>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT month_start, amount_eur FROM manual_monthly_winnings
+             WHERE source = ?1 ORDER BY month_start",
+        )
+        .map_err(to_string)?;
+    statement
+        .query_map([source], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(to_string)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(to_string)
 }
 
 pub fn first_snapshot_value(
@@ -450,8 +519,8 @@ mod tests {
 
     use super::{
         add_wallet, cash_event_count, create_portfolio, ensure_portfolio, history_sync_state,
-        initialize, list_portfolios, save_cash_events, save_history_sync_state, save_snapshot,
-        simple_return_since,
+        initialize, list_portfolios, monthly_winnings, save_cash_events, save_history_sync_state,
+        save_monthly_winnings, save_snapshot, simple_return_since,
     };
 
     #[test]
@@ -531,8 +600,8 @@ mod tests {
     fn refreshes_the_current_snapshot_bucket() {
         let database = Connection::open_in_memory().expect("in-memory database");
         initialize(&database).expect("schema");
-        save_snapshot(&database, "total", 0, 10.0, 8.0, 60).expect("first snapshot");
-        save_snapshot(&database, "total", 0, 12.0, 8.0, 60).expect("updated snapshot");
+        save_snapshot(&database, "total", 0, 10.0, 8.0, 0.0, 60).expect("first snapshot");
+        save_snapshot(&database, "total", 0, 12.0, 8.0, 0.0, 60).expect("updated snapshot");
 
         let (count, value): (i64, f64) = database
             .query_row(
@@ -557,11 +626,48 @@ mod tests {
             )
             .expect("snapshot");
 
-        let (amount, percent) =
-            simple_return_since(&database, "2026-08-01T00:00:00+00:00", 250.0, 1500.0)
-                .expect("period return");
+        let (amount, percent) = simple_return_since(
+            &database,
+            "2026-08-01T00:00:00+00:00",
+            250.0,
+            1500.0,
+            0.0,
+            0.0,
+        )
+        .expect("period return");
         assert!((amount - 150.0).abs() < f64::EPSILON);
         assert!((percent - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn upserts_monthly_winnings_and_replaces_the_recording_jump() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        save_monthly_winnings(&database, "opessocius", "2026-07-01", 100.0).unwrap();
+        save_monthly_winnings(&database, "opessocius", "2026-07-01", 120.0).unwrap();
+        assert_eq!(
+            monthly_winnings(&database, "opessocius").unwrap(),
+            vec![("2026-07-01".to_string(), 120.0)]
+        );
+
+        database
+            .execute(
+                "INSERT INTO snapshots(source_kind, source_id, captured_at, value_eur,
+                        invested_eur, opessocius_winnings_eur)
+                 VALUES ('total', 0, '2026-01-01T00:00:00+00:00', 1000, 900, 0)",
+                [],
+            )
+            .expect("snapshot");
+        let (amount, _) = simple_return_since(
+            &database,
+            "2026-01-01T00:00:00+00:00",
+            220.0,
+            1000.0,
+            120.0,
+            120.0,
+        )
+        .unwrap();
+        assert!((amount - 120.0).abs() < f64::EPSILON);
     }
 
     #[test]

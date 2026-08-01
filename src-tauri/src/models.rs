@@ -10,6 +10,7 @@ pub struct Dashboard {
     pub return_percent: f64,
     pub monthly_return: PeriodReturn,
     pub yearly_return: PeriodReturn,
+    pub opessocius_previous_month: MonthlyWinnings,
     pub net_contributions: f64,
     pub history_event_count: i64,
     pub history_backfill_complete: bool,
@@ -20,6 +21,14 @@ pub struct Dashboard {
     pub holdings: Vec<Holding>,
     pub portfolios: Vec<CryptoPortfolio>,
     pub notices: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthlyWinnings {
+    pub month: String,
+    pub label: String,
+    pub amount: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +44,8 @@ pub struct DataPoint {
     pub timestamp: String,
     pub value: f64,
     pub invested: f64,
+    #[serde(skip_serializing)]
+    pub opessocius_winnings: f64,
 }
 
 #[derive(Debug, Serialize)]

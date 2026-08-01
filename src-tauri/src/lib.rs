@@ -58,6 +58,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_dashboard,
+            commands::set_opessocius_previous_month_winnings,
             commands::list_crypto_portfolios,
             commands::add_wallet,
             commands::remove_wallet,
