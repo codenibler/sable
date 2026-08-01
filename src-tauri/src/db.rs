@@ -239,11 +239,16 @@ pub fn create_portfolio(connection: &Connection, name: &str) -> Result<i64, Stri
     Ok(connection.last_insert_rowid())
 }
 
-pub fn delete_portfolio(connection: &Connection, id: i64) -> Result<(), String> {
+pub fn ensure_portfolio(connection: &Connection) -> Result<i64, String> {
     connection
-        .execute("DELETE FROM portfolios WHERE id = ?1", [id])
-        .map_err(to_string)?;
-    Ok(())
+        .query_row(
+            "SELECT id FROM portfolios ORDER BY created_at, id LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(to_string)?
+        .map_or_else(|| create_portfolio(connection, "Crypto"), Ok)
 }
 
 pub fn add_wallet(
@@ -378,8 +383,8 @@ mod tests {
     use crate::models::CashEvent;
 
     use super::{
-        add_wallet, cash_event_count, create_portfolio, history_sync_state, initialize,
-        list_portfolios, save_cash_events, save_history_sync_state, save_snapshot,
+        add_wallet, cash_event_count, create_portfolio, ensure_portfolio, history_sync_state,
+        initialize, list_portfolios, save_cash_events, save_history_sync_state, save_snapshot,
     };
 
     #[test]
@@ -400,6 +405,16 @@ mod tests {
         assert_eq!(portfolios.len(), 1);
         assert_eq!(portfolios[0].wallets.len(), 1);
         assert_eq!(portfolios[0].wallets[0].label, "Ledger");
+    }
+
+    #[test]
+    fn ensures_exactly_one_initial_portfolio() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        let first = ensure_portfolio(&database).expect("initial portfolio");
+        let second = ensure_portfolio(&database).expect("existing portfolio");
+        assert_eq!(first, second);
+        assert_eq!(list_portfolios(&database).unwrap().len(), 1);
     }
 
     #[test]

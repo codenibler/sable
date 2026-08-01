@@ -4,12 +4,10 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   BriefcaseBusiness,
-  ChevronRight,
   CircleAlert,
   LayoutDashboard,
   Plus,
   RefreshCw,
-  Trash2,
   WalletCards,
   X,
 } from "lucide-react";
@@ -29,7 +27,6 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [walletModal, setWalletModal] = useState(false);
-  const [portfolioModal, setPortfolioModal] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -65,10 +62,6 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <button className="brand" onClick={() => setView("overview")} aria-label="Portfolio 1 home">
-          <span>P</span>
-          <strong>Portfolio 1</strong>
-        </button>
         <nav>
           <button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}>
             <LayoutDashboard size={18} /> Overview
@@ -100,7 +93,7 @@ function App() {
             <button className="icon-button" onClick={() => void refresh()} disabled={loading} aria-label="Refresh portfolio">
               <RefreshCw size={18} className={loading ? "spin" : ""} />
             </button>
-            <button className="primary-button" onClick={() => dashboard?.portfolios.length ? setWalletModal(true) : setPortfolioModal(true)}>
+            <button className="primary-button" onClick={() => setWalletModal(true)} disabled={!dashboard?.portfolios.length}>
               <Plus size={17} /> Add wallet
             </button>
           </div>
@@ -116,7 +109,6 @@ function App() {
           <Wallets
             portfolios={dashboard.portfolios}
             formatMoney={formatMoney}
-            onAddPortfolio={() => setPortfolioModal(true)}
             onAddWallet={() => setWalletModal(true)}
             onChanged={refresh}
           />
@@ -125,9 +117,6 @@ function App() {
 
       {walletModal && dashboard && (
         <WalletModal portfolios={dashboard.portfolios} onClose={() => setWalletModal(false)} onSaved={async () => { setWalletModal(false); await refresh(); }} />
-      )}
-      {portfolioModal && (
-        <PortfolioModal onClose={() => setPortfolioModal(false)} onSaved={async () => { setPortfolioModal(false); await refresh(); setWalletModal(true); }} />
       )}
     </div>
   );
@@ -197,26 +186,22 @@ function Metric({ label, value, helper }: { label: string; value: string; helper
   return <div className="metric-card"><p className="metric-label">{label}</p><strong>{value}</strong>{helper && <small>{helper}</small>}</div>;
 }
 
-function Wallets({ portfolios, formatMoney, onAddPortfolio, onAddWallet, onChanged }: { portfolios: CryptoPortfolio[]; formatMoney: (value: number) => string; onAddPortfolio: () => void; onAddWallet: () => void; onChanged: () => Promise<void> }) {
-  const removePortfolio = async (portfolio: CryptoPortfolio) => {
-    if (!window.confirm(`Delete “${portfolio.name}” and its local wallet list?`)) return;
-    await api.deletePortfolio(portfolio.id);
-    await onChanged();
-  };
+function Wallets({ portfolios, formatMoney, onAddWallet, onChanged }: { portfolios: CryptoPortfolio[]; formatMoney: (value: number) => string; onAddWallet: () => void; onChanged: () => Promise<void> }) {
+  const portfolio = portfolios[0];
   const removeWallet = async (id: number) => {
     await api.removeWallet(id);
     await onChanged();
   };
   return <div className="view-stack">
-    <div className="wallet-actions"><button className="secondary-button" onClick={onAddPortfolio}><Plus size={16} /> New portfolio</button><button className="primary-button" onClick={onAddWallet} disabled={!portfolios.length}><Plus size={16} /> Add wallet</button></div>
-    {portfolios.length ? portfolios.map((portfolio) => (
+    <div className="wallet-actions"><button className="primary-button" onClick={onAddWallet}><Plus size={16} /> Add wallet</button></div>
+    {portfolio ? (
       <section className="panel portfolio-panel" key={portfolio.id}>
-        <div className="portfolio-header"><div><p className="section-label">Crypto portfolio</p><h2>{portfolio.name}</h2></div><div className="portfolio-total"><strong>{formatMoney(portfolio.value)}</strong><button className="ghost-danger" onClick={() => void removePortfolio(portfolio)} aria-label={`Delete ${portfolio.name}`}><Trash2 size={16} /></button></div></div>
+        <div className="portfolio-header"><div><p className="section-label">On-chain assets</p><h2>Wallets</h2></div><div className="portfolio-total"><strong>{formatMoney(portfolio.value)}</strong></div></div>
         {portfolio.wallets.length ? <div className="wallet-list">{portfolio.wallets.map((wallet) => (
           <div className="wallet-row" key={wallet.id}><span className={`network-mark ${wallet.network}`}>{wallet.symbol.slice(0, 1)}</span><div className="wallet-identity"><strong>{wallet.label}</strong><small>{wallet.address.slice(0, 8)}…{wallet.address.slice(-6)}</small></div><div className="wallet-balance"><strong>{wallet.balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} {wallet.symbol}</strong><small>{wallet.message ?? formatMoney(wallet.value)}</small></div><button className="row-action" onClick={() => void removeWallet(wallet.id)} aria-label={`Remove ${wallet.label}`}><X size={16} /></button></div>
-        ))}</div> : <Empty icon={<WalletCards size={22} />} title="No wallets in this portfolio" text="Add BTC, ETH, or SOL addresses to see their cumulative balance." action={<button className="text-button" onClick={onAddWallet}>Add first wallet <ChevronRight size={15} /></button>} />}
+        ))}</div> : <Empty icon={<WalletCards size={22} />} title="No wallets yet" text="Add BTC, ETH, or SOL addresses to see their cumulative balance." action={<button className="primary-button" onClick={onAddWallet}><Plus size={16} /> Add first wallet</button>} />}
       </section>
-    )) : <section className="panel"><Empty icon={<WalletCards size={24} />} title="Create your first crypto portfolio" text="A portfolio can contain any collection of BTC, ETH, and SOL addresses." action={<button className="primary-button" onClick={onAddPortfolio}><Plus size={16} /> New portfolio</button>} /></section>}
+    ) : null}
   </div>;
 }
 
@@ -232,12 +217,6 @@ function WalletModal({ portfolios, onClose, onSaved }: { portfolios: CryptoPortf
     <label>Label <span>optional</span><input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder="Cold wallet" /></label>
     {error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Adding…" : "Add wallet"}</button>
   </form></Modal>;
-}
-
-function PortfolioModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => Promise<void> }) {
-  const [name, setName] = useState(""); const [error, setError] = useState<string | null>(null); const [saving, setSaving] = useState(false);
-  const submit = async (event: FormEvent) => { event.preventDefault(); setSaving(true); try { await api.createPortfolio(name); await onSaved(); } catch (caught) { setError(messageOf(caught)); setSaving(false); } };
-  return <Modal title="New crypto portfolio" subtitle="Group any collection of public wallet addresses." onClose={onClose}><form onSubmit={submit}><label>Portfolio name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="Long-term crypto" required maxLength={60} /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Creating…" : "Create portfolio"}</button></form></Modal>;
 }
 
 function Modal({ title, subtitle, onClose, children }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode }) {

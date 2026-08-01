@@ -318,22 +318,6 @@ pub fn list_crypto_portfolios(state: State<'_, AppState>) -> Result<Vec<CryptoPo
 }
 
 #[tauri::command]
-pub fn create_crypto_portfolio(state: State<'_, AppState>, name: String) -> Result<i64, String> {
-    let name = name.trim();
-    if name.is_empty() || name.len() > 60 {
-        return Err("Portfolio name must contain 1–60 characters".to_string());
-    }
-    let database = state.database.lock().map_err(|_| "Database lock failed")?;
-    db::create_portfolio(&database, name)
-}
-
-#[tauri::command]
-pub fn delete_crypto_portfolio(state: State<'_, AppState>, id: i64) -> Result<(), String> {
-    let database = state.database.lock().map_err(|_| "Database lock failed")?;
-    db::delete_portfolio(&database, id)
-}
-
-#[tauri::command]
 pub fn add_wallet(state: State<'_, AppState>, input: AddWalletInput) -> Result<i64, String> {
     let network = crypto::validate_address(&input.network, &input.address)?;
     let label = if input.label.trim().is_empty() {

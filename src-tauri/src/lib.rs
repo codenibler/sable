@@ -20,6 +20,7 @@ pub fn run() {
             fs::create_dir_all(&data_directory)?;
             let database = db::open(&data_directory.join(&config.database_filename))
                 .map_err(std::io::Error::other)?;
+            db::ensure_portfolio(&database).map_err(std::io::Error::other)?;
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(config.http_timeout_seconds))
                 .user_agent("Portfolio-1/0.1")
@@ -57,8 +58,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_dashboard,
             commands::list_crypto_portfolios,
-            commands::create_crypto_portfolio,
-            commands::delete_crypto_portfolio,
             commands::add_wallet,
             commands::remove_wallet,
         ])

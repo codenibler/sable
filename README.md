@@ -5,10 +5,10 @@ Portfolio 1 is a dark, local-first desktop monitor for a Trading 212 Invest acco
 ## Current scope
 
 - Read-only Trading 212 account summary and open positions
-- Any number of named crypto portfolios
-- Any number of BTC, ETH, and SOL public addresses per portfolio
+- One automatically created crypto portfolio
+- Any number of BTC, ETH, and SOL public addresses
 - Native BTC, ETH, and SOL balances with EUR pricing
-- Combined and per-portfolio hourly snapshots in local SQLite
+- Combined and crypto hourly snapshots in local SQLite
 - Resumable Trading 212 cash-history backfill with net deposits, cash-flow-adjusted profit, and annualized MWRR
 - Responsive React interface designed to carry forward to Tauri iOS
 - Partial-failure handling when one provider is unavailable
