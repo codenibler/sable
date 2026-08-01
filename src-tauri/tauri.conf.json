@@ -15,8 +15,8 @@
         "title": "Portfolio 1",
         "width": 1280,
         "height": 820,
-        "minWidth": 920,
-        "minHeight": 640,
+        "minWidth": 360,
+        "minHeight": 520,
         "decorations": true,
         "resizable": true
       }
