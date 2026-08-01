@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Portfolio 1
+Comment=Private, local-first portfolio monitor
+Exec=/home/codenibler/Applications/Portfolio-1.AppImage
+TryExec=/home/codenibler/Applications/Portfolio-1.AppImage
+Path=/home/codenibler/Projects/portfolio_monitor
+Icon=/home/codenibler/.local/share/applications/icons/portfolio-1.png
+Terminal=false
+Type=Application
+Categories=Office;Finance;
+StartupNotify=true

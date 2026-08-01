@@ -42,6 +42,13 @@ cargo test --manifest-path src-tauri/Cargo.toml
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
 
+## Omarchy installation
+
+Build the AppImage, copy it to `~/Applications/Portfolio-1.AppImage`, and install
+`packaging/portfolio-1.desktop` under `~/.local/share/applications`. The launcher
+uses this repository as its working directory so the ignored `.env` remains the
+single credentials source; no secrets are copied into the Applications folder.
+
 ## Data providers
 
 - [Trading 212 Public API](https://docs.trading212.com/api) for the Invest account
