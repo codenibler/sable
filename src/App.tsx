@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { PerformanceChart } from "./components/PerformanceChart";
-import type { AddWalletInput, CryptoPortfolio, Dashboard } from "./types";
+import type { AddWalletInput, CryptoPortfolio, Dashboard, PeriodReturn } from "./types";
 
 type View = "overview" | "wallets";
 
@@ -170,17 +170,41 @@ function Overview({ dashboard, formatMoney }: { dashboard: Dashboard; formatMone
             </tbody></table></div>
           ) : <Empty icon={<BriefcaseBusiness size={22} />} title="No holdings yet" text="Connected positions and wallets will appear here." />}
         </div>
-        <div className="panel sources-panel">
-          <div className="panel-heading"><div><p className="section-label">Breakdown</p><h2>Sources</h2></div></div>
-          <div className="source-list">
-            {dashboard.sources.map((source) => (
-              <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small></div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
-            ))}
+        <aside className="overview-aside">
+          <div className="panel sources-panel">
+            <div className="panel-heading"><div><p className="section-label">Breakdown</p><h2>Sources</h2></div></div>
+            <div className="source-list">
+              {dashboard.sources.map((source) => (
+                <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small></div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
+              ))}
+            </div>
           </div>
-        </div>
+          <PeriodReturns monthly={dashboard.monthlyReturn} yearly={dashboard.yearlyReturn} formatMoney={formatMoney} />
+        </aside>
       </section>
     </div>
   );
+}
+
+function PeriodReturns({ monthly, yearly, formatMoney }: { monthly: PeriodReturn; yearly: PeriodReturn; formatMoney: (value: number) => string }) {
+  const rows = [
+    { label: "This month", short: "MTD", value: monthly },
+    { label: "This year", short: "YTD", value: yearly },
+  ];
+  return <div className="panel period-returns-panel">
+    <div className="panel-heading"><div><p className="section-label">Performance</p><h2>Period returns</h2></div></div>
+    <div className="period-return-list">
+      {rows.map(({ label, short, value }) => {
+        const valueClass = value.amount >= 0 ? "positive-text" : "negative-text";
+        return <div className="period-return-item" key={short}>
+          <div className="period-return-label"><span>{label}</span><small>{short}</small></div>
+          <strong className={valueClass}>{value.percent >= 0 ? "+" : ""}{value.percent.toFixed(2)}%</strong>
+          <p className={valueClass}>{value.amount >= 0 ? "+" : ""}{formatMoney(value.amount)}</p>
+        </div>;
+      })}
+    </div>
+    <p className="period-return-note">Simple return · deposit timing ignored</p>
+  </div>;
 }
 
 function Metric({ label, value, helper, valueClassName }: { label: string; value: string; helper?: string; valueClassName?: string }) {

@@ -132,6 +132,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 
 .lower-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, .8fr); gap: 17px; }
 .holdings-panel { min-width: 0; }
+.overview-aside { display: grid; min-width: 0; align-content: start; gap: 17px; }
 .muted { color: #686d6a; }
 .panel-heading > .muted { font-size: var(--font-caption); }
 .table-wrap { overflow-x: auto; }
@@ -163,6 +164,13 @@ tbody tr:last-child td { border-bottom: 0; }
 .source-item small { overflow: hidden; margin-top: 3px; color: #5f6461; font-size: var(--font-caption); text-overflow: ellipsis; white-space: nowrap; }
 .source-value { display: grid; text-align: right; }
 .source-value strong { font-variant-numeric: tabular-nums; }
+.period-return-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line-soft); background: var(--line-soft); gap: 1px; }
+.period-return-item { min-width: 0; padding: 17px 18px 16px; background: var(--surface); }
+.period-return-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #777d79; font-size: var(--font-caption); }
+.period-return-label small { padding: 2px 5px; border: 1px solid #2b2e2d; border-radius: 4px; color: #5d625f; font-size: .65rem; font-weight: 700; letter-spacing: .08em; }
+.period-return-item > strong { display: block; margin-top: 12px; font-size: var(--font-heading); font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -.025em; }
+.period-return-item > p { margin: 4px 0 0; font-size: var(--font-caption); font-variant-numeric: tabular-nums; }
+.period-return-note { margin: 0; padding: 11px 18px 12px; border-top: 1px solid var(--line-soft); color: #555a57; font-size: var(--font-caption); }
 
 .wallet-actions { justify-content: flex-end; }
 .portfolio-panel { overflow: visible; }

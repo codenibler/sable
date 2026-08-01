@@ -396,6 +396,32 @@ pub fn total_history(connection: &Connection) -> Result<Vec<DataPoint>, String> 
     Ok(points)
 }
 
+pub fn simple_return_since(
+    connection: &Connection,
+    since: &str,
+    current_return: f64,
+    current_invested: f64,
+) -> Result<(f64, f64), String> {
+    let starting_return = connection
+        .query_row(
+            "SELECT value_eur - invested_eur FROM snapshots
+             WHERE source_kind = 'total' AND captured_at >= ?1
+             ORDER BY captured_at LIMIT 1",
+            [since],
+            |row| row.get::<_, f64>(0),
+        )
+        .optional()
+        .map_err(to_string)?
+        .unwrap_or(current_return);
+    let amount = current_return - starting_return;
+    let percent = if current_invested > 0.0 {
+        amount / current_invested * 100.0
+    } else {
+        0.0
+    };
+    Ok((amount, percent))
+}
+
 pub fn first_snapshot_value(
     connection: &Connection,
     source_kind: &str,
@@ -425,6 +451,7 @@ mod tests {
     use super::{
         add_wallet, cash_event_count, create_portfolio, ensure_portfolio, history_sync_state,
         initialize, list_portfolios, save_cash_events, save_history_sync_state, save_snapshot,
+        simple_return_since,
     };
 
     #[test]
@@ -516,6 +543,25 @@ mod tests {
             .expect("snapshot query");
         assert_eq!(count, 1);
         assert_eq!(value, 12.0);
+    }
+
+    #[test]
+    fn calculates_simple_period_return_without_cash_flow_timing() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        database
+            .execute(
+                "INSERT INTO snapshots(source_kind, source_id, captured_at, value_eur, invested_eur)
+                 VALUES ('total', 0, '2026-08-01T00:00:00+00:00', 1000, 900)",
+                [],
+            )
+            .expect("snapshot");
+
+        let (amount, percent) =
+            simple_return_since(&database, "2026-08-01T00:00:00+00:00", 250.0, 1500.0)
+                .expect("period return");
+        assert!((amount - 150.0).abs() < f64::EPSILON);
+        assert!((percent - 10.0).abs() < f64::EPSILON);
     }
 
     #[test]

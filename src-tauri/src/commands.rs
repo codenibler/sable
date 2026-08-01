@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Mutex};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Utc};
 use reqwest::Client;
 use rusqlite::Connection;
 use tauri::State;
@@ -9,7 +9,8 @@ use crate::{
     config::Config,
     db,
     models::{
-        AddWalletInput, CryptoPortfolio, Dashboard, HistorySyncState, Holding, SourceSummary,
+        AddWalletInput, CryptoPortfolio, Dashboard, HistorySyncState, Holding, PeriodReturn,
+        SourceSummary,
     },
     providers::{crypto, trading212},
 };
@@ -242,9 +243,34 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     }
     holdings.sort_by(|left, right| right.value.total_cmp(&left.value));
 
-    let history = {
+    let local_now = Local::now();
+    let month_start = Local
+        .with_ymd_and_hms(local_now.year(), local_now.month(), 1, 0, 0, 0)
+        .single()
+        .map(|date| date.with_timezone(&Utc).to_rfc3339())
+        .ok_or("Could not determine the start of the current month")?;
+    let year_start = Local
+        .with_ymd_and_hms(local_now.year(), 1, 1, 0, 0, 0)
+        .single()
+        .map(|date| date.with_timezone(&Utc).to_rfc3339())
+        .ok_or("Could not determine the start of the current year")?;
+    let (history, monthly_return, yearly_return) = {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
-        db::total_history(&database)?
+        let monthly =
+            db::simple_return_since(&database, &month_start, total_return, contribution_basis)?;
+        let yearly =
+            db::simple_return_since(&database, &year_start, total_return, contribution_basis)?;
+        (
+            db::total_history(&database)?,
+            PeriodReturn {
+                amount: monthly.0,
+                percent: monthly.1,
+            },
+            PeriodReturn {
+                amount: yearly.0,
+                percent: yearly.1,
+            },
+        )
     };
 
     Ok(Dashboard {
@@ -257,6 +283,8 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         } else {
             0.0
         },
+        monthly_return,
+        yearly_return,
         net_contributions: cash_history.net_contributions + opessocius_invested,
         history_event_count: cash_history.event_count,
         history_backfill_complete: cash_history.backfill_complete,

@@ -8,6 +8,8 @@ pub struct Dashboard {
     pub cash_value: f64,
     pub total_return: f64,
     pub return_percent: f64,
+    pub monthly_return: PeriodReturn,
+    pub yearly_return: PeriodReturn,
     pub net_contributions: f64,
     pub history_event_count: i64,
     pub history_backfill_complete: bool,
@@ -18,6 +20,13 @@ pub struct Dashboard {
     pub holdings: Vec<Holding>,
     pub portfolios: Vec<CryptoPortfolio>,
     pub notices: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeriodReturn {
+    pub amount: f64,
+    pub percent: f64,
 }
 
 #[derive(Debug, Serialize)]

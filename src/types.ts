@@ -54,6 +54,8 @@ export type Dashboard = {
   cashValue: number;
   totalReturn: number;
   returnPercent: number;
+  monthlyReturn: PeriodReturn;
+  yearlyReturn: PeriodReturn;
   netContributions: number;
   historyEventCount: number;
   historyBackfillComplete: boolean;
@@ -64,6 +66,11 @@ export type Dashboard = {
   holdings: Holding[];
   portfolios: CryptoPortfolio[];
   notices: string[];
+};
+
+export type PeriodReturn = {
+  amount: number;
+  percent: number;
 };
 
 export type AddWalletInput = {
