@@ -2,6 +2,8 @@
 
 Portfolio 1 is a dark, local-first desktop monitor for a Trading 212 Invest account and BTC, ETH, and SOL wallets. It shows combined value in EUR, current holdings, source health, profit/loss, and an equity history built from local snapshots.
 
+The interface uses [General Sans](https://www.fontshare.com/fonts/general-sans) by Indian Type Foundry, bundled locally under the [Fontshare free-font license](https://www.fontshare.com/licenses/itf-ffl).
+
 ## Current scope
 
 - Read-only Trading 212 account summary and open positions
