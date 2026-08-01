@@ -150,22 +150,34 @@ pub fn save_snapshot(
     invested: f64,
     interval_minutes: i64,
 ) -> Result<(), String> {
-    let last: Option<String> = connection
+    let last: Option<(i64, String)> = connection
         .query_row(
-            "SELECT captured_at FROM snapshots
+            "SELECT id, captured_at FROM snapshots
              WHERE source_kind = ?1 AND source_id = ?2
              ORDER BY captured_at DESC LIMIT 1",
             params![source_kind, source_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
         .map_err(to_string)?;
 
-    let should_insert = last
-        .and_then(|value| value.parse::<chrono::DateTime<Utc>>().ok())
-        .is_none_or(|time| Utc::now() - time >= Duration::minutes(interval_minutes));
+    let recent_id = last.and_then(|(id, value)| {
+        value
+            .parse::<chrono::DateTime<Utc>>()
+            .ok()
+            .filter(|time| Utc::now() - *time < Duration::minutes(interval_minutes))
+            .map(|_| id)
+    });
 
-    if should_insert {
+    if let Some(id) = recent_id {
+        connection
+            .execute(
+                "UPDATE snapshots SET captured_at = ?1, value_eur = ?2, invested_eur = ?3
+                 WHERE id = ?4",
+                params![Utc::now().to_rfc3339(), value, invested, id],
+            )
+            .map_err(to_string)?;
+    } else {
         connection
             .execute(
                 "INSERT INTO snapshots(source_kind, source_id, captured_at, value_eur, invested_eur)
