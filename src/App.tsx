@@ -150,8 +150,9 @@ function Overview({ dashboard, formatMoney }: { dashboard: Dashboard; formatMone
         />
         <Metric
           label="Total return"
-          value={formatMoney(dashboard.totalReturn)}
-          helper={`${dashboard.returnPercent.toFixed(2)}% of invested capital`}
+          value={`${dashboard.returnPercent.toFixed(2)}%`}
+          helper={formatMoney(dashboard.totalReturn)}
+          valueClassName={dashboard.totalReturn >= 0 ? "positive-text" : "negative-text"}
         />
         <Metric label="Cash" value={formatMoney(dashboard.cashValue)} />
       </section>
@@ -182,8 +183,8 @@ function Overview({ dashboard, formatMoney }: { dashboard: Dashboard; formatMone
   );
 }
 
-function Metric({ label, value, helper }: { label: string; value: string; helper?: string }) {
-  return <div className="metric-card"><p className="metric-label">{label}</p><strong>{value}</strong>{helper && <small>{helper}</small>}</div>;
+function Metric({ label, value, helper, valueClassName }: { label: string; value: string; helper?: string; valueClassName?: string }) {
+  return <div className="metric-card"><p className="metric-label">{label}</p><strong className={valueClassName}>{value}</strong>{helper && <small>{helper}</small>}</div>;
 }
 
 function Wallets({ portfolios, formatMoney, onAddWallet, onChanged }: { portfolios: CryptoPortfolio[]; formatMoney: (value: number) => string; onAddWallet: () => void; onChanged: () => Promise<void> }) {
