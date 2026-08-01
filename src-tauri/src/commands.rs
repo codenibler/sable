@@ -19,6 +19,7 @@ pub struct AppState {
     pub database: Mutex<Connection>,
     pub client: Client,
     pub config: Config,
+    pub history_sync: tokio::sync::Mutex<()>,
 }
 
 #[tauri::command]
@@ -244,7 +245,8 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     })
 }
 
-async fn sync_trading_history(state: &AppState) -> Result<(), String> {
+pub(crate) async fn sync_trading_history(state: &AppState) -> Result<(), String> {
+    let _sync_guard = state.history_sync.lock().await;
     let sync_state = {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
         db::history_sync_state(&database)?

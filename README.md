@@ -53,6 +53,6 @@ All provider base URLs are replaceable in `.env`, so public endpoints can later 
 
 The React/TypeScript frontend contains no credentials and can only invoke a narrow set of Tauri commands. Rust owns environment loading, HTTP authentication, address validation, provider calls, aggregation, and SQLite access. The webview receives only display-ready portfolio data.
 
-Trading 212 history is retrieved in rate-safe batches. If the dashboard reports that backfill is still in progress, refresh after the API rate-limit window to continue from the stored cursor; already stored events are never duplicated.
+Trading 212 history is retrieved in rate-safe batches. Large histories continue automatically while the app remains open, and manual refreshes resume from the same stored cursor; already stored events are never duplicated.
 
 The next logical milestones are token indexing, historical market-value reconstruction before the first local snapshot, operating-system keyring storage, background refresh, Linux packaging, and then Tauri's iOS target with an explicit synchronization design.

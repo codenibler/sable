@@ -15,6 +15,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let config = config::Config::load().map_err(std::io::Error::other)?;
+            let history_backfill_retry_seconds = config.history_backfill_retry_seconds;
             let data_directory = app.path().app_data_dir()?;
             fs::create_dir_all(&data_directory)?;
             let database = db::open(&data_directory.join(&config.database_filename))
@@ -27,6 +28,27 @@ pub fn run() {
                 database: std::sync::Mutex::new(database),
                 client,
                 config,
+                history_sync: tokio::sync::Mutex::new(()),
+            });
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(history_backfill_retry_seconds)).await;
+                    let state = app_handle.state::<AppState>();
+                    if !state.config.trading212_is_configured() {
+                        break;
+                    }
+                    let complete = state
+                        .database
+                        .lock()
+                        .ok()
+                        .and_then(|database| db::history_sync_state(&database).ok())
+                        .is_some_and(|sync| sync.backfill_complete);
+                    if complete {
+                        break;
+                    }
+                    let _ = commands::sync_trading_history(&state).await;
+                }
             });
             Ok(())
         })

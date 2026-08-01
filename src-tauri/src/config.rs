@@ -16,6 +16,7 @@ pub struct Config {
     pub database_filename: String,
     pub trading212_history_max_pages: usize,
     pub history_sync_interval_minutes: i64,
+    pub history_backfill_retry_seconds: u64,
 }
 
 impl Config {
@@ -46,6 +47,9 @@ impl Config {
             history_sync_interval_minutes: required("HISTORY_SYNC_INTERVAL_MINUTES")?
                 .parse()
                 .map_err(|_| "HISTORY_SYNC_INTERVAL_MINUTES must be a whole number".to_string())?,
+            history_backfill_retry_seconds: required("HISTORY_BACKFILL_RETRY_SECONDS")?
+                .parse()
+                .map_err(|_| "HISTORY_BACKFILL_RETRY_SECONDS must be a whole number".to_string())?,
         })
     }
 
