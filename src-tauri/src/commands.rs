@@ -137,7 +137,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         value: opessocius_value,
         return_value: opessocius_return,
         connected: true,
-        message: Some("Manual balance · no live connection".to_string()),
+        message: Some("trading firm".to_string()),
     });
     holdings.push(Holding {
         id: "manual-opessocius".to_string(),
@@ -224,13 +224,6 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
             invested_value,
             state.config.snapshot_interval_minutes,
         )?;
-    }
-
-    if has_wallets {
-        notices.push(
-            "Wallet balances currently include native BTC, ETH, and SOL; indexed token balances are the next adapter extension."
-                .to_string(),
-        );
     }
 
     let total_value = trading_value + crypto_value + opessocius_value;
