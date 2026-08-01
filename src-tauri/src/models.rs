@@ -92,3 +92,25 @@ pub struct TradingOverview {
     pub return_value: f64,
     pub holdings: Vec<Holding>,
 }
+
+#[derive(Debug, Clone)]
+pub struct CashEvent {
+    pub reference: String,
+    pub event_type: String,
+    pub amount: f64,
+    pub currency: String,
+    pub date_time: String,
+}
+
+#[derive(Debug)]
+pub struct TransactionPage {
+    pub events: Vec<CashEvent>,
+    pub next_path: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HistorySyncState {
+    pub next_path: Option<String>,
+    pub backfill_complete: bool,
+    pub last_synced_at: Option<String>,
+}

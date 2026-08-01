@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::{
     config::Config,
-    models::{Holding, TradingOverview},
+    models::{CashEvent, Holding, TradingOverview, TransactionPage},
 };
 
 pub async fn fetch_overview(client: &Client, config: &Config) -> Result<TradingOverview, String> {
@@ -49,6 +49,34 @@ pub async fn fetch_overview(client: &Client, config: &Config) -> Result<TradingO
     })
 }
 
+pub async fn fetch_transaction_page(
+    client: &Client,
+    config: &Config,
+    path: &str,
+) -> Result<TransactionPage, String> {
+    let key = config
+        .trading212_api_key
+        .as_ref()
+        .ok_or_else(|| "Trading 212 API key is not configured".to_string())?;
+    let secret = config
+        .trading212_api_secret
+        .as_ref()
+        .ok_or_else(|| "Trading 212 API secret is not configured".to_string())?;
+    let response = get(client, config, key, secret, path).await?;
+    let events = response
+        .pointer("/items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Trading 212 transaction history was unreadable".to_string())?
+        .iter()
+        .filter_map(transaction_from_value)
+        .collect();
+    let next_path = response
+        .pointer("/nextPagePath")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok(TransactionPage { events, next_path })
+}
+
 async fn get(
     client: &Client,
     config: &Config,
@@ -57,11 +85,7 @@ async fn get(
     path: &str,
 ) -> Result<Value, String> {
     let response = client
-        .get(format!(
-            "{}{}",
-            config.trading212_base_url.trim_end_matches('/'),
-            path
-        ))
+        .get(api_url(config, path))
         .basic_auth(key, Some(secret))
         .send()
         .await
@@ -82,7 +106,27 @@ async fn get(
         .map_err(|_| "Trading 212 returned an unreadable response".to_string())
 }
 
-async fn currency_rate(client: &Client, config: &Config, from: &str) -> Result<f64, String> {
+fn api_url(config: &Config, path: &str) -> String {
+    let base = config.trading212_base_url.trim_end_matches('/');
+    if path.starts_with("/api/v0/") {
+        let origin = base.strip_suffix("/api/v0").unwrap_or(base);
+        format!("{origin}{path}")
+    } else {
+        format!("{base}{path}")
+    }
+}
+
+fn transaction_from_value(value: &Value) -> Option<CashEvent> {
+    Some(CashEvent {
+        reference: text(value, "/reference")?.to_string(),
+        event_type: text(value, "/type")?.to_string(),
+        amount: value.pointer("/amount")?.as_f64()?,
+        currency: text(value, "/currency")?.to_string(),
+        date_time: text(value, "/dateTime")?.to_string(),
+    })
+}
+
+pub async fn currency_rate(client: &Client, config: &Config, from: &str) -> Result<f64, String> {
     if from.eq_ignore_ascii_case(&config.base_currency) {
         return Ok(1.0);
     }

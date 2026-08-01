@@ -14,6 +14,8 @@ pub struct Config {
     pub snapshot_interval_minutes: i64,
     pub http_timeout_seconds: u64,
     pub database_filename: String,
+    pub trading212_history_max_pages: usize,
+    pub history_sync_interval_minutes: i64,
 }
 
 impl Config {
@@ -37,6 +39,13 @@ impl Config {
                 .parse()
                 .map_err(|_| "HTTP_TIMEOUT_SECONDS must be a whole number".to_string())?,
             database_filename: required("DATABASE_FILENAME")?,
+            trading212_history_max_pages: required("TRADING212_HISTORY_MAX_PAGES")?
+                .parse::<usize>()
+                .map_err(|_| "TRADING212_HISTORY_MAX_PAGES must be a whole number".to_string())?
+                .clamp(1, 5),
+            history_sync_interval_minutes: required("HISTORY_SYNC_INTERVAL_MINUTES")?
+                .parse()
+                .map_err(|_| "HISTORY_SYNC_INTERVAL_MINUTES must be a whole number".to_string())?,
         })
     }
 

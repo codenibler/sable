@@ -3,7 +3,7 @@ use std::path::Path;
 use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::models::{CryptoPortfolio, DataPoint, Wallet};
+use crate::models::{CashEvent, CryptoPortfolio, DataPoint, HistorySyncState, Wallet};
 
 pub fn open(path: &Path) -> Result<Connection, String> {
     let connection = Connection::open(path).map_err(to_string)?;
@@ -38,10 +38,105 @@ fn initialize(connection: &Connection) -> Result<(), String> {
                 invested_eur REAL NOT NULL
              );
              CREATE INDEX IF NOT EXISTS snapshots_source_time
-                ON snapshots(source_kind, source_id, captured_at);",
+                ON snapshots(source_kind, source_id, captured_at);
+             CREATE TABLE IF NOT EXISTS cash_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reference TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                amount_eur REAL NOT NULL,
+                original_amount REAL NOT NULL,
+                currency TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                UNIQUE(reference, event_type, occurred_at, original_amount)
+             );
+             CREATE INDEX IF NOT EXISTS cash_events_time ON cash_events(occurred_at);
+             CREATE TABLE IF NOT EXISTS history_sync (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                next_path TEXT,
+                backfill_complete INTEGER NOT NULL DEFAULT 0,
+                last_synced_at TEXT
+             );",
         )
         .map_err(to_string)?;
     Ok(())
+}
+
+pub fn history_sync_state(connection: &Connection) -> Result<HistorySyncState, String> {
+    connection
+        .query_row(
+            "SELECT next_path, backfill_complete, last_synced_at FROM history_sync WHERE id = 1",
+            [],
+            |row| {
+                Ok(HistorySyncState {
+                    next_path: row.get(0)?,
+                    backfill_complete: row.get::<_, i64>(1)? != 0,
+                    last_synced_at: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(to_string)
+        .map(|state| {
+            state.unwrap_or(HistorySyncState {
+                next_path: Some("/equity/history/transactions?limit=50".to_string()),
+                backfill_complete: false,
+                last_synced_at: None,
+            })
+        })
+}
+
+pub fn save_cash_events(
+    connection: &Connection,
+    events: &[(CashEvent, f64)],
+) -> Result<usize, String> {
+    let mut inserted = 0;
+    for (event, rate) in events {
+        inserted += connection
+            .execute(
+                "INSERT OR IGNORE INTO cash_events(
+                    reference, event_type, amount_eur, original_amount, currency, occurred_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    event.reference,
+                    event.event_type,
+                    event.amount * rate,
+                    event.amount,
+                    event.currency,
+                    event.date_time,
+                ],
+            )
+            .map_err(to_string)?;
+    }
+    Ok(inserted)
+}
+
+pub fn save_history_sync_state(
+    connection: &Connection,
+    next_path: Option<&str>,
+    backfill_complete: bool,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO history_sync(id, next_path, backfill_complete, last_synced_at)
+             VALUES (1, ?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+                next_path = excluded.next_path,
+                backfill_complete = excluded.backfill_complete,
+                last_synced_at = excluded.last_synced_at",
+            params![
+                next_path,
+                i64::from(backfill_complete),
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .map_err(to_string)?;
+    Ok(())
+}
+
+pub fn cash_event_count(connection: &Connection) -> Result<i64, String> {
+    connection
+        .query_row("SELECT COUNT(*) FROM cash_events", [], |row| row.get(0))
+        .map_err(to_string)
 }
 
 pub fn list_portfolios(connection: &Connection) -> Result<Vec<CryptoPortfolio>, String> {
@@ -240,7 +335,12 @@ fn to_string(error: rusqlite::Error) -> String {
 mod tests {
     use rusqlite::Connection;
 
-    use super::{add_wallet, create_portfolio, initialize, list_portfolios, save_snapshot};
+    use crate::models::CashEvent;
+
+    use super::{
+        add_wallet, cash_event_count, create_portfolio, history_sync_state, initialize,
+        list_portfolios, save_cash_events, save_history_sync_state, save_snapshot,
+    };
 
     #[test]
     fn stores_grouped_wallets() {
@@ -278,5 +378,31 @@ mod tests {
             .expect("snapshot query");
         assert_eq!(count, 1);
         assert_eq!(value, 12.0);
+    }
+
+    #[test]
+    fn stores_cash_events_idempotently_and_tracks_backfill() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        let event = CashEvent {
+            reference: "reference-1".to_string(),
+            event_type: "DEPOSIT".to_string(),
+            amount: 100.0,
+            currency: "EUR".to_string(),
+            date_time: "2025-01-02T12:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            save_cash_events(&database, &[(event.clone(), 1.0)]).unwrap(),
+            1
+        );
+        assert_eq!(save_cash_events(&database, &[(event, 1.0)]).unwrap(), 0);
+        assert_eq!(cash_event_count(&database).unwrap(), 1);
+
+        save_history_sync_state(&database, Some("/next"), false).unwrap();
+        let state = history_sync_state(&database).unwrap();
+        assert_eq!(state.next_path.as_deref(), Some("/next"));
+        assert!(!state.backfill_complete);
+        assert!(state.last_synced_at.is_some());
     }
 }
