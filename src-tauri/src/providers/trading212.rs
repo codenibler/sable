@@ -88,10 +88,11 @@ async fn currency_rate(client: &Client, config: &Config, from: &str) -> Result<f
     }
     let response: Value = client
         .get(format!(
-            "{}/latest",
-            config.frankfurter_base_url.trim_end_matches('/')
+            "{}/rate/{}/{}",
+            config.frankfurter_base_url.trim_end_matches('/'),
+            from,
+            config.base_currency,
         ))
-        .query(&[("from", from), ("to", config.base_currency.as_str())])
         .send()
         .await
         .map_err(network_error)?
@@ -106,7 +107,7 @@ async fn currency_rate(client: &Client, config: &Config, from: &str) -> Result<f
         .await
         .map_err(|_| "Currency conversion returned an unreadable response".to_string())?;
     response
-        .pointer(&format!("/rates/{}", config.base_currency))
+        .pointer("/rate")
         .and_then(Value::as_f64)
         .ok_or_else(|| {
             format!(

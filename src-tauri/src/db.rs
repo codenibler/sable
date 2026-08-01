@@ -7,6 +7,11 @@ use crate::models::{CryptoPortfolio, DataPoint, Wallet};
 
 pub fn open(path: &Path) -> Result<Connection, String> {
     let connection = Connection::open(path).map_err(to_string)?;
+    initialize(&connection)?;
+    Ok(connection)
+}
+
+fn initialize(connection: &Connection) -> Result<(), String> {
     connection
         .execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -36,7 +41,7 @@ pub fn open(path: &Path) -> Result<Connection, String> {
                 ON snapshots(source_kind, source_id, captured_at);",
         )
         .map_err(to_string)?;
-    Ok(connection)
+    Ok(())
 }
 
 pub fn list_portfolios(connection: &Connection) -> Result<Vec<CryptoPortfolio>, String> {
@@ -229,4 +234,49 @@ pub fn first_snapshot_value(
 
 fn to_string(error: rusqlite::Error) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    use super::{add_wallet, create_portfolio, initialize, list_portfolios, save_snapshot};
+
+    #[test]
+    fn stores_grouped_wallets() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        let portfolio_id = create_portfolio(&database, "Cold storage").expect("portfolio");
+        add_wallet(
+            &database,
+            portfolio_id,
+            "eth",
+            "0x0000000000000000000000000000000000000000",
+            "Ledger",
+        )
+        .expect("wallet");
+
+        let portfolios = list_portfolios(&database).expect("portfolio list");
+        assert_eq!(portfolios.len(), 1);
+        assert_eq!(portfolios[0].wallets.len(), 1);
+        assert_eq!(portfolios[0].wallets[0].label, "Ledger");
+    }
+
+    #[test]
+    fn refreshes_the_current_snapshot_bucket() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        save_snapshot(&database, "total", 0, 10.0, 8.0, 60).expect("first snapshot");
+        save_snapshot(&database, "total", 0, 12.0, 8.0, 60).expect("updated snapshot");
+
+        let (count, value): (i64, f64) = database
+            .query_row(
+                "SELECT COUNT(*), MAX(value_eur) FROM snapshots WHERE source_kind = 'total'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("snapshot query");
+        assert_eq!(count, 1);
+        assert_eq!(value, 12.0);
+    }
 }
