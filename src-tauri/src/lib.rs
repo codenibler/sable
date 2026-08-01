@@ -8,7 +8,7 @@ mod providers;
 use std::{fs, time::Duration};
 
 use commands::AppState;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -47,7 +47,9 @@ pub fn run() {
                     if complete {
                         break;
                     }
-                    let _ = commands::sync_trading_history(&state).await;
+                    if commands::sync_trading_history(&state).await.is_ok() {
+                        let _ = app_handle.emit("history-synced", ());
+                    }
                 }
             });
             Ok(())

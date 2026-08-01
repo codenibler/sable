@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -44,6 +45,14 @@ function App() {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen("history-synced", () => void refresh()).then((stopListening) => {
+      unlisten = stopListening;
+    });
+    return () => unlisten?.();
   }, [refresh]);
 
   const currency = dashboard?.currency ?? "EUR";
