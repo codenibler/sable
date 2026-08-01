@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Mutex,
+};
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Utc};
 use reqwest::Client;
@@ -40,17 +43,22 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
         db::cash_history_summary(&database)?
     };
-    let opessocius_winnings = {
+    let (return_month_start, return_month_label) = return_month(Local::now())?;
+    let (opessocius_winnings, return_month_amount, return_month_is_override) = {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
-        db::monthly_winnings(&database, OPESSOCIUS_SOURCE)?
+        ensure_default_monthly_returns(
+            &database,
+            state.config.opessocius_current_balance,
+            state.config.opessocius_monthly_return_rate,
+            &return_month_start,
+        )?;
+        let winnings = db::monthly_winnings(&database, OPESSOCIUS_SOURCE)?;
+        let (amount, is_override) =
+            db::monthly_winning(&database, OPESSOCIUS_SOURCE, &return_month_start)?
+                .ok_or("Could not determine the latest Opessocius return")?;
+        (winnings, amount, is_override)
     };
     let total_opessocius_winnings: f64 = opessocius_winnings.iter().map(|(_, amount)| amount).sum();
-    let (previous_month_start, previous_month_label) = previous_month(Local::now())?;
-    let previous_month_amount = opessocius_winnings
-        .iter()
-        .find(|(month, _)| month == &previous_month_start)
-        .map(|(_, amount)| *amount)
-        .unwrap_or_default();
     let trading_result = if state.config.trading212_is_configured() {
         trading212::fetch_overview(&state.client, &state.config).await
     } else {
@@ -151,8 +159,16 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         return_value: opessocius_return,
         connected: true,
         message: Some(format!(
-            "trading firm · {} winnings recorded",
-            opessocius_winnings.len()
+            "{} · {} monthly returns recorded",
+            if return_month_is_override {
+                format!("manual {return_month_label} override")
+            } else {
+                format!(
+                    "{:.2}% month-end default",
+                    state.config.opessocius_monthly_return_rate * 100.0
+                )
+            },
+            opessocius_winnings.len(),
         )),
     });
     holdings.push(Holding {
@@ -334,10 +350,12 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         },
         monthly_return,
         yearly_return,
-        opessocius_previous_month: MonthlyWinnings {
-            month: previous_month_start,
-            label: previous_month_label,
-            amount: previous_month_amount,
+        opessocius_monthly_return: MonthlyWinnings {
+            month: return_month_start,
+            label: return_month_label,
+            amount: return_month_amount,
+            is_override: return_month_is_override,
+            default_rate_percent: state.config.opessocius_monthly_return_rate * 100.0,
         },
         net_contributions: cash_history.net_contributions + opessocius_invested,
         history_event_count: cash_history.event_count,
@@ -418,16 +436,78 @@ fn history_sync_is_due(state: &HistorySyncState, interval_minutes: i64) -> bool 
         .is_none_or(|last_sync| Utc::now() - last_sync >= Duration::minutes(interval_minutes))
 }
 
-fn previous_month(now: DateTime<Local>) -> Result<(String, String), String> {
+fn return_month(now: DateTime<Local>) -> Result<(String, String), String> {
     let current_month = NaiveDate::from_ymd_opt(now.year(), now.month(), 1)
         .ok_or("Could not determine the current month")?;
-    let previous = current_month - Duration::days(1);
-    let start = NaiveDate::from_ymd_opt(previous.year(), previous.month(), 1)
-        .ok_or("Could not determine the previous month")?;
+    let next_month = next_month_start(current_month)?;
+    let final_day = next_month - Duration::days(1);
+    let start = if now.date_naive() == final_day {
+        current_month
+    } else {
+        let previous = current_month - Duration::days(1);
+        NaiveDate::from_ymd_opt(previous.year(), previous.month(), 1)
+            .ok_or("Could not determine the previous month")?
+    };
     Ok((
         start.format("%Y-%m-%d").to_string(),
         start.format("%B %Y").to_string(),
     ))
+}
+
+fn next_month_start(month: NaiveDate) -> Result<NaiveDate, String> {
+    let (year, month_number) = if month.month() == 12 {
+        (month.year() + 1, 1)
+    } else {
+        (month.year(), month.month() + 1)
+    };
+    NaiveDate::from_ymd_opt(year, month_number, 1)
+        .ok_or_else(|| "Could not determine the next month".to_string())
+}
+
+fn planned_default_monthly_returns(
+    existing: &[(String, f64)],
+    opening_balance: f64,
+    monthly_rate: f64,
+    through_month: &str,
+) -> Result<Vec<(String, f64)>, String> {
+    let through = NaiveDate::parse_from_str(through_month, "%Y-%m-%d")
+        .map_err(|_| "Could not determine the latest Opessocius return month")?;
+    let mut recorded = BTreeMap::new();
+    for (month, amount) in existing {
+        let date = NaiveDate::parse_from_str(month, "%Y-%m-%d")
+            .map_err(|_| "Stored monthly winnings contain an invalid month")?;
+        recorded.insert(date, *amount);
+    }
+
+    let mut month = recorded.keys().next().copied().unwrap_or(through);
+    let mut balance = opening_balance;
+    let mut planned = Vec::new();
+    while month <= through {
+        if let Some(amount) = recorded.get(&month) {
+            balance += amount;
+        } else {
+            let amount = (balance * monthly_rate * 100.0).round() / 100.0;
+            planned.push((month.format("%Y-%m-%d").to_string(), amount));
+            balance += amount;
+        }
+        month = next_month_start(month)?;
+    }
+    Ok(planned)
+}
+
+fn ensure_default_monthly_returns(
+    connection: &rusqlite::Connection,
+    opening_balance: f64,
+    monthly_rate: f64,
+    through_month: &str,
+) -> Result<(), String> {
+    let existing = db::monthly_winnings(connection, OPESSOCIUS_SOURCE)?;
+    for (month, amount) in
+        planned_default_monthly_returns(&existing, opening_balance, monthly_rate, through_month)?
+    {
+        db::save_monthly_winnings(connection, OPESSOCIUS_SOURCE, &month, amount, false)?;
+    }
+    Ok(())
 }
 
 fn month_bounds(month_start: &str) -> Result<(DateTime<Utc>, DateTime<Utc>), String> {
@@ -492,16 +572,16 @@ fn accrued_monthly_winnings(month: &str, amount: f64, at: DateTime<Utc>) -> Resu
 }
 
 #[tauri::command]
-pub fn set_opessocius_previous_month_winnings(
+pub fn set_opessocius_monthly_return(
     state: State<'_, AppState>,
     amount: f64,
 ) -> Result<(), String> {
-    if !amount.is_finite() || amount < 0.0 {
-        return Err("Winnings must be a non-negative amount".to_string());
+    if !amount.is_finite() {
+        return Err("Monthly return must be a valid amount".to_string());
     }
-    let (month_start, _) = previous_month(Local::now())?;
+    let (month_start, _) = return_month(Local::now())?;
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
-    db::save_monthly_winnings(&database, OPESSOCIUS_SOURCE, &month_start, amount)
+    db::save_monthly_winnings(&database, OPESSOCIUS_SOURCE, &month_start, amount, true)
 }
 
 #[tauri::command]
@@ -544,7 +624,10 @@ pub fn remove_wallet(state: State<'_, AppState>, id: i64) -> Result<(), String> 
 
 #[cfg(test)]
 mod tests {
-    use super::{accrued_monthly_winnings, distributed_winnings, month_bounds, previous_month};
+    use super::{
+        accrued_monthly_winnings, distributed_winnings, month_bounds,
+        planned_default_monthly_returns, return_month,
+    };
     use chrono::{Local, TimeZone};
 
     #[test]
@@ -553,9 +636,35 @@ mod tests {
             .with_ymd_and_hms(2026, 1, 15, 12, 0, 0)
             .single()
             .expect("local date");
-        let (month, label) = previous_month(now).unwrap();
+        let (month, label) = return_month(now).unwrap();
         assert_eq!(month, "2025-12-01");
         assert_eq!(label, "December 2025");
+    }
+
+    #[test]
+    fn applies_the_current_month_on_its_final_calendar_day() {
+        for (year, month, day) in [(2026, 2, 28), (2026, 4, 30), (2026, 8, 31)] {
+            let now = Local
+                .with_ymd_and_hms(year, month, day, 12, 0, 0)
+                .single()
+                .expect("local date");
+            let (return_month, _) = return_month(now).unwrap();
+            assert_eq!(return_month, format!("{year:04}-{month:02}-01"));
+        }
+    }
+
+    #[test]
+    fn compounds_missing_months_at_the_configured_default_rate() {
+        let existing = vec![("2026-07-01".to_string(), 20.0)];
+        let planned =
+            planned_default_monthly_returns(&existing, 1_000.0, 0.02, "2026-09-01").unwrap();
+        assert_eq!(
+            planned,
+            vec![
+                ("2026-08-01".to_string(), 20.4),
+                ("2026-09-01".to_string(), 20.81),
+            ]
+        );
     }
 
     #[test]
@@ -564,6 +673,8 @@ mod tests {
         let midpoint = start + (end - start) / 2;
         let accrued = accrued_monthly_winnings("2026-07-01", 310.0, midpoint).unwrap();
         assert!((accrued - 155.0).abs() < 0.000_001);
+        let loss = accrued_monthly_winnings("2026-07-01", -100.0, midpoint).unwrap();
+        assert!((loss + 50.0).abs() < 0.000_001);
 
         let entries = vec![("2026-07-01".to_string(), 310.0)];
         assert_eq!(distributed_winnings(&entries, start, end).unwrap(), 310.0);

@@ -124,7 +124,7 @@ function App() {
         <WalletModal portfolios={dashboard.portfolios} onClose={() => setWalletModal(false)} onSaved={async () => { setWalletModal(false); await refresh(); }} />
       )}
       {winningsModal && dashboard && (
-        <WinningsModal winnings={dashboard.opessociusPreviousMonth} currency={dashboard.currency} onClose={() => setWinningsModal(false)} onSaved={async () => { setWinningsModal(false); await refresh(); }} />
+        <WinningsModal winnings={dashboard.opessociusMonthlyReturn} currency={dashboard.currency} onClose={() => setWinningsModal(false)} onSaved={async () => { setWinningsModal(false); await refresh(); }} />
       )}
     </div>
   );
@@ -183,7 +183,7 @@ function Overview({ dashboard, formatMoney, onAddWinnings }: { dashboard: Dashbo
             <div className="panel-heading"><div><p className="section-label">Breakdown</p><h2>Sources</h2></div></div>
             <div className="source-list">
               {dashboard.sources.map((source) => (
-                <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div className="source-copy"><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small>{source.id === "opessocius" && <button className="source-action" onClick={onAddWinnings}>{dashboard.opessociusPreviousMonth.amount > 0 ? "Edit winnings" : "Add winnings"}</button>}</div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
+                <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div className="source-copy"><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small>{source.id === "opessocius" && <button className="source-action" onClick={onAddWinnings}>{dashboard.opessociusMonthlyReturn.isOverride ? "Edit return" : "Override return"}</button>}</div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
               ))}
             </div>
           </div>
@@ -254,29 +254,29 @@ function WalletModal({ portfolios, onClose, onSaved }: { portfolios: CryptoPortf
 }
 
 function WinningsModal({ winnings, currency, onClose, onSaved }: { winnings: MonthlyWinnings; currency: string; onClose: () => void; onSaved: () => Promise<void> }) {
-  const [amount, setAmount] = useState(winnings.amount > 0 ? String(winnings.amount) : "");
+  const [amount, setAmount] = useState(String(winnings.amount));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const parsed = Number(amount);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      setError("Enter a non-negative winnings amount.");
+    if (!Number.isFinite(parsed)) {
+      setError("Enter a valid monthly return amount.");
       return;
     }
     setSaving(true);
     setError(null);
     try {
-      await api.setOpessociusPreviousMonthWinnings(parsed);
+      await api.setOpessociusMonthlyReturn(parsed);
       await onSaved();
     } catch (caught) {
       setError(messageOf(caught));
       setSaving(false);
     }
   };
-  return <Modal title={`${winnings.label} winnings`} subtitle={`Add the total Opessocius winnings for ${winnings.label}. Sable spreads them evenly across the entire month for return calculations.`} onClose={onClose}><form onSubmit={submit}>
-    <label>Total winnings ({currency})<input autoFocus type="number" min="0" step="0.01" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required /><small className="field-note">Saving replaces the existing value for this month, so edits are never counted twice.</small></label>
-    {error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Saving…" : winnings.amount > 0 ? "Update winnings" : "Add winnings"}</button>
+  return <Modal title={`${winnings.label} return`} subtitle={`Sable applies a ${winnings.defaultRatePercent.toFixed(2)}% month-end return by default. Override the total return for ${winnings.label} here.`} onClose={onClose}><form onSubmit={submit}>
+    <label>Total return ({currency})<input autoFocus type="number" step="0.01" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required /><small className="field-note">Saving replaces the default. A lower or negative amount is attributed across this month and is never counted twice.</small></label>
+    {error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Saving…" : "Save override"}</button>
   </form></Modal>;
 }
 

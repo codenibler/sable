@@ -67,6 +67,7 @@ fn initialize(connection: &Connection) -> Result<(), String> {
                 source TEXT NOT NULL,
                 month_start TEXT NOT NULL,
                 amount_eur REAL NOT NULL,
+                is_override INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(source, month_start)
@@ -92,6 +93,10 @@ fn initialize(connection: &Connection) -> Result<(), String> {
     add_column_if_missing(
         connection,
         "ALTER TABLE snapshots ADD COLUMN opessocius_winnings_eur REAL NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ALTER TABLE manual_monthly_winnings ADD COLUMN is_override INTEGER NOT NULL DEFAULT 1",
     )?;
     Ok(())
 }
@@ -459,19 +464,38 @@ pub fn save_monthly_winnings(
     source: &str,
     month_start: &str,
     amount: f64,
+    is_override: bool,
 ) -> Result<(), String> {
     let now = Utc::now().to_rfc3339();
     connection
         .execute(
-            "INSERT INTO manual_monthly_winnings(source, month_start, amount_eur, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?4)
+            "INSERT INTO manual_monthly_winnings(
+                source, month_start, amount_eur, is_override, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
              ON CONFLICT(source, month_start) DO UPDATE SET
                 amount_eur = excluded.amount_eur,
+                is_override = excluded.is_override,
                 updated_at = excluded.updated_at",
-            params![source, month_start, amount, now],
+            params![source, month_start, amount, i64::from(is_override), now],
         )
         .map_err(to_string)?;
     Ok(())
+}
+
+pub fn monthly_winning(
+    connection: &Connection,
+    source: &str,
+    month_start: &str,
+) -> Result<Option<(f64, bool)>, String> {
+    connection
+        .query_row(
+            "SELECT amount_eur, is_override FROM manual_monthly_winnings
+             WHERE source = ?1 AND month_start = ?2",
+            params![source, month_start],
+            |row| Ok((row.get(0)?, row.get::<_, i64>(1)? != 0)),
+        )
+        .optional()
+        .map_err(to_string)
 }
 
 pub fn monthly_winnings(
@@ -519,8 +543,8 @@ mod tests {
 
     use super::{
         add_wallet, cash_event_count, create_portfolio, ensure_portfolio, history_sync_state,
-        initialize, list_portfolios, monthly_winnings, save_cash_events, save_history_sync_state,
-        save_monthly_winnings, save_snapshot, simple_return_since,
+        initialize, list_portfolios, monthly_winning, monthly_winnings, save_cash_events,
+        save_history_sync_state, save_monthly_winnings, save_snapshot, simple_return_since,
     };
 
     #[test]
@@ -643,11 +667,15 @@ mod tests {
     fn upserts_monthly_winnings_and_replaces_the_recording_jump() {
         let database = Connection::open_in_memory().expect("in-memory database");
         initialize(&database).expect("schema");
-        save_monthly_winnings(&database, "opessocius", "2026-07-01", 100.0).unwrap();
-        save_monthly_winnings(&database, "opessocius", "2026-07-01", 120.0).unwrap();
+        save_monthly_winnings(&database, "opessocius", "2026-07-01", 100.0, false).unwrap();
+        save_monthly_winnings(&database, "opessocius", "2026-07-01", 120.0, true).unwrap();
         assert_eq!(
             monthly_winnings(&database, "opessocius").unwrap(),
             vec![("2026-07-01".to_string(), 120.0)]
+        );
+        assert_eq!(
+            monthly_winning(&database, "opessocius", "2026-07-01").unwrap(),
+            Some((120.0, true))
         );
 
         database
@@ -668,6 +696,32 @@ mod tests {
         )
         .unwrap();
         assert!((amount - 120.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn treats_returns_from_the_old_schema_as_manual_overrides() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        database
+            .execute_batch(
+                "CREATE TABLE manual_monthly_winnings (
+                    source TEXT NOT NULL,
+                    month_start TEXT NOT NULL,
+                    amount_eur REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(source, month_start)
+                 );
+                 INSERT INTO manual_monthly_winnings VALUES (
+                    'opessocius', '2026-07-01', 75, '2026-08-01', '2026-08-01'
+                 );",
+            )
+            .expect("legacy schema");
+        initialize(&database).expect("migrated schema");
+
+        assert_eq!(
+            monthly_winning(&database, "opessocius", "2026-07-01").unwrap(),
+            Some((75.0, true))
+        );
     }
 
     #[test]

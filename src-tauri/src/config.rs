@@ -24,6 +24,7 @@ pub struct Config {
     pub opessocius_name: String,
     pub opessocius_current_balance: f64,
     pub opessocius_net_deposits: f64,
+    pub opessocius_monthly_return_rate: f64,
     pub configured_bitcoin_xpubs: Vec<String>,
     pub configured_ethereum_addresses: Vec<String>,
     pub configured_solana_addresses: Vec<String>,
@@ -69,6 +70,7 @@ impl Config {
             opessocius_name: required("OPESSOCIUS_NAME")?,
             opessocius_current_balance: non_negative_amount("OPESSOCIUS_CURRENT_BALANCE")?,
             opessocius_net_deposits: non_negative_amount("OPESSOCIUS_NET_DEPOSITS")?,
+            opessocius_monthly_return_rate: unit_rate("OPESSOCIUS_MONTHLY_RETURN_RATE")?,
             configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
             configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
@@ -119,6 +121,17 @@ fn non_negative_amount(key: &str) -> Result<f64, String> {
         Ok(amount)
     } else {
         Err(format!("{key} must be a non-negative amount"))
+    }
+}
+
+fn unit_rate(key: &str) -> Result<f64, String> {
+    let rate = required(key)?
+        .parse::<f64>()
+        .map_err(|_| format!("{key} must be a decimal rate"))?;
+    if rate.is_finite() && (0.0..=1.0).contains(&rate) {
+        Ok(rate)
+    } else {
+        Err(format!("{key} must be between 0 and 1"))
     }
 }
 

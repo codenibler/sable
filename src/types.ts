@@ -56,7 +56,7 @@ export type Dashboard = {
   returnPercent: number;
   monthlyReturn: PeriodReturn;
   yearlyReturn: PeriodReturn;
-  opessociusPreviousMonth: MonthlyWinnings;
+  opessociusMonthlyReturn: MonthlyWinnings;
   netContributions: number;
   historyEventCount: number;
   historyBackfillComplete: boolean;
@@ -73,6 +73,8 @@ export type MonthlyWinnings = {
   month: string;
   label: string;
   amount: number;
+  isOverride: boolean;
+  defaultRatePercent: number;
 };
 
 export type PeriodReturn = {
