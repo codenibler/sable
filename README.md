@@ -9,6 +9,7 @@ Portfolio 1 is a dark, local-first desktop monitor for a Trading 212 Invest acco
 - Any number of BTC, ETH, and SOL public addresses per portfolio
 - Native BTC, ETH, and SOL balances with EUR pricing
 - Combined and per-portfolio hourly snapshots in local SQLite
+- Resumable Trading 212 cash-history backfill with net deposits, cash-flow-adjusted profit, and annualized MWRR
 - Responsive React interface designed to carry forward to Tauri iOS
 - Partial-failure handling when one provider is unavailable
 
@@ -52,4 +53,6 @@ All provider base URLs are replaceable in `.env`, so public endpoints can later 
 
 The React/TypeScript frontend contains no credentials and can only invoke a narrow set of Tauri commands. Rust owns environment loading, HTTP authentication, address validation, provider calls, aggregation, and SQLite access. The webview receives only display-ready portfolio data.
 
-The next logical milestones are token indexing, transaction-based historical backfill, operating-system keyring storage, background refresh, Linux packaging, and then Tauri's iOS target with an explicit synchronization design.
+Trading 212 history is retrieved in rate-safe batches. If the dashboard reports that backfill is still in progress, refresh after the API rate-limit window to continue from the stored cursor; already stored events are never duplicated.
+
+The next logical milestones are token indexing, historical market-value reconstruction before the first local snapshot, operating-system keyring storage, background refresh, Linux packaging, and then Tauri's iOS target with an explicit synchronization design.

@@ -52,6 +52,10 @@ export type Dashboard = {
   cashValue: number;
   totalReturn: number;
   returnPercent: number;
+  netContributions: number;
+  moneyWeightedReturnPercent: number | null;
+  historyEventCount: number;
+  historyBackfillComplete: boolean;
   currency: string;
   updatedAt: string;
   history: DataPoint[];

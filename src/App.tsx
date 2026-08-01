@@ -141,10 +141,21 @@ function Overview({ dashboard, formatMoney }: { dashboard: Dashboard; formatMone
             {positive ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}
             {dashboard.returnPercent.toFixed(2)}% · {formatMoney(dashboard.totalReturn)}
           </span>
+          <small className="return-method">
+            {dashboard.historyBackfillComplete ? "Cash-flow adjusted" : "Current holdings basis"}
+          </small>
         </div>
-        <Metric label="Invested" value={formatMoney(dashboard.investedValue)} />
+        <Metric
+          label={dashboard.historyEventCount ? "Net deposits" : "Invested"}
+          value={formatMoney(dashboard.historyEventCount ? dashboard.netContributions : dashboard.investedValue)}
+          helper={dashboard.historyEventCount ? `${dashboard.historyEventCount} cash events` : undefined}
+        />
+        <Metric
+          label="MWRR"
+          value={dashboard.moneyWeightedReturnPercent == null ? "Building" : `${dashboard.moneyWeightedReturnPercent.toFixed(2)}%`}
+          helper={dashboard.moneyWeightedReturnPercent == null ? "Completes after backfill" : "Annualised · Trading 212"}
+        />
         <Metric label="Cash" value={formatMoney(dashboard.cashValue)} />
-        <Metric label="Sources" value={String(dashboard.sources.length)} helper={`${dashboard.sources.filter((source) => source.connected).length} connected`} />
       </section>
 
       <PerformanceChart history={dashboard.history} format={formatMoney} />
