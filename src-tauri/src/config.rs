@@ -21,6 +21,9 @@ pub struct Config {
     pub xpub_scan_concurrency: usize,
     pub xpub_max_addresses_per_branch: usize,
     pub xpub_refresh_interval_minutes: i64,
+    pub opessocius_name: String,
+    pub opessocius_current_balance: f64,
+    pub opessocius_net_deposits: f64,
     pub configured_bitcoin_xpubs: Vec<String>,
     pub configured_ethereum_addresses: Vec<String>,
     pub configured_solana_addresses: Vec<String>,
@@ -63,6 +66,9 @@ impl Config {
                 .clamp(20, 5_000),
             xpub_refresh_interval_minutes: whole_number("XPUB_REFRESH_INTERVAL_MINUTES")?
                 .clamp(1, 10_080) as i64,
+            opessocius_name: required("OPESSOCIUS_NAME")?,
+            opessocius_current_balance: non_negative_amount("OPESSOCIUS_CURRENT_BALANCE")?,
+            opessocius_net_deposits: non_negative_amount("OPESSOCIUS_NET_DEPOSITS")?,
             configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
             configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
@@ -103,6 +109,17 @@ fn whole_number(key: &str) -> Result<usize, String> {
     required(key)?
         .parse()
         .map_err(|_| format!("{key} must be a whole number"))
+}
+
+fn non_negative_amount(key: &str) -> Result<f64, String> {
+    let amount = required(key)?
+        .parse::<f64>()
+        .map_err(|_| format!("{key} must be a valid amount"))?;
+    if amount.is_finite() && amount >= 0.0 {
+        Ok(amount)
+    } else {
+        Err(format!("{key} must be a non-negative amount"))
+    }
 }
 
 fn configured_list(key: &str) -> Vec<String> {

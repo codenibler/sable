@@ -127,6 +127,36 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         }
     };
 
+    let opessocius_value = state.config.opessocius_current_balance;
+    let opessocius_invested = state.config.opessocius_net_deposits;
+    let opessocius_return = opessocius_value - opessocius_invested;
+    sources.push(SourceSummary {
+        id: "opessocius".to_string(),
+        name: state.config.opessocius_name.clone(),
+        kind: "manual".to_string(),
+        value: opessocius_value,
+        return_value: opessocius_return,
+        connected: true,
+        message: Some("Manual balance · no live connection".to_string()),
+    });
+    holdings.push(Holding {
+        id: "manual-opessocius".to_string(),
+        symbol: state
+            .config
+            .opessocius_name
+            .chars()
+            .take(2)
+            .collect::<String>()
+            .to_uppercase(),
+        name: state.config.opessocius_name.clone(),
+        source: state.config.opessocius_name.clone(),
+        quantity: 1.0,
+        price: opessocius_value,
+        value: opessocius_value,
+        return_value: opessocius_return,
+        allocation: 0.0,
+    });
+
     let mut crypto_value = 0.0;
     let mut crypto_invested = 0.0;
     let mut crypto_return = 0.0;
@@ -180,11 +210,11 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
             }));
         }
 
-        let total_value = trading_value + crypto_value;
+        let total_value = trading_value + crypto_value + opessocius_value;
         let invested_value = if history_is_usable {
-            cash_history.net_contributions + crypto_invested
+            cash_history.net_contributions + crypto_invested + opessocius_invested
         } else {
-            trading_invested + crypto_invested
+            trading_invested + crypto_invested + opessocius_invested
         };
         db::save_snapshot(
             &database,
@@ -203,11 +233,11 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         );
     }
 
-    let total_value = trading_value + crypto_value;
-    let invested_value = trading_invested + crypto_invested;
-    let total_return = trading_return + crypto_return;
+    let total_value = trading_value + crypto_value + opessocius_value;
+    let invested_value = trading_invested + crypto_invested + opessocius_invested;
+    let total_return = trading_return + crypto_return + opessocius_return;
     let contribution_basis = if history_is_usable {
-        cash_history.net_contributions + crypto_invested
+        cash_history.net_contributions + crypto_invested + opessocius_invested
     } else {
         invested_value
     };
@@ -240,7 +270,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         } else {
             0.0
         },
-        net_contributions: cash_history.net_contributions,
+        net_contributions: cash_history.net_contributions + opessocius_invested,
         money_weighted_return_percent,
         history_event_count: cash_history.event_count,
         history_backfill_complete: cash_history.backfill_complete,
