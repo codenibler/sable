@@ -1,19 +1,20 @@
 # Portfolio 1
 
-Portfolio 1 is a dark, local-first desktop monitor for a Trading 212 Invest account and grouped BTC, ETH, and SOL wallet addresses. It shows combined value in EUR, current holdings, source health, profit/loss, and an equity history built from local snapshots.
+Portfolio 1 is a dark, local-first desktop monitor for a Trading 212 Invest account and BTC, ETH, and SOL wallets. It shows combined value in EUR, current holdings, source health, profit/loss, and an equity history built from local snapshots.
 
 ## Current scope
 
 - Read-only Trading 212 account summary and open positions
 - One automatically created crypto portfolio
-- Any number of BTC, ETH, and SOL public addresses
+- BTC public addresses and account-level mainnet `xpub`, `ypub`, or `zpub` keys
+- Any number of ETH and SOL public addresses
 - Native BTC, ETH, and SOL balances with EUR pricing
 - Combined and crypto hourly snapshots in local SQLite
 - Resumable Trading 212 cash-history backfill with net deposits, cash-flow-adjusted profit, and annualized MWRR
 - Responsive React interface designed to carry forward to Tauri iOS
 - Partial-failure handling when one provider is unavailable
 
-Token contracts held by ETH or SOL wallets are not indexed yet. Public wallet addresses are safe to monitor, but Portfolio 1 will never ask for a private key or seed phrase. Configured RPC and explorer providers can see the public addresses requested from them; use self-hosted endpoints in `.env` if that metadata is sensitive.
+Token contracts held by ETH or SOL wallets are not indexed yet. Portfolio 1 will never ask for a private key or seed phrase. Extended public keys are sensitive metadata because they reveal a wallet's address history: keep `.env` private. XPUB derivation happens locally and Blockstream receives only the derived public addresses. All configured providers can still correlate addresses requested from the same connection; use self-hosted endpoints in `.env` if that metadata is sensitive.
 
 ## Run locally
 
@@ -27,7 +28,7 @@ npm run tauri dev
 
 Fill in `TRADING212_API_KEY` and `TRADING212_API_SECRET` using a key with only the account and portfolio read permissions required by the app. Never grant order permissions.
 
-The existing `.env` is ignored by Git. Runtime endpoints, currency, timeouts, snapshot cadence, and the database filename are also configured there. The SQLite database is stored under the operating system's application-data directory, not in this repository.
+The existing `.env` is ignored by Git. Wallets can be imported at startup with `HWR_BITCOIN_XPUBS`, `HWR_ETHEREUM_ADDRESSES`, and `HWR_SOLANA_ADDRESSES`; comma-separated entries are accepted and repeated starts do not duplicate them. Runtime endpoints, currency, timeouts, snapshot cadence, XPUB scan limits, and the database filename are also configured there. The SQLite database is stored under the operating system's application-data directory, not in this repository.
 
 ## Verification
 

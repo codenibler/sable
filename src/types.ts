@@ -32,6 +32,8 @@ export type Wallet = {
   network: "btc" | "eth" | "sol";
   address: string;
   label: string;
+  walletType: "address" | "xpub";
+  addressCount: number;
   balance: number;
   symbol: string;
   value: number;
@@ -67,7 +69,7 @@ export type Dashboard = {
 
 export type AddWalletInput = {
   portfolioId: number;
-  network: Wallet["network"];
+  network: Wallet["network"] | "btc-xpub";
   address: string;
   label: string;
 };
