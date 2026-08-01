@@ -56,8 +56,8 @@ export function PerformanceChart({ history, format }: { history: DataPoint[]; fo
           <svg className="chart" viewBox="0 0 1000 250" preserveAspectRatio="none" role="img" aria-label="Portfolio value over time">
             <defs>
               <linearGradient id="equity-fill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stopColor="#83f5b3" stopOpacity="0.22" />
-                <stop offset="1" stopColor="#83f5b3" stopOpacity="0" />
+                <stop offset="0" stopColor="#b39a63" stopOpacity="0.12" />
+                <stop offset="1" stopColor="#b39a63" stopOpacity="0" />
               </linearGradient>
             </defs>
             <path className="chart-grid" d="M0 62.5H1000M0 125H1000M0 187.5H1000" />

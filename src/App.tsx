@@ -63,6 +63,10 @@ function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
+        <div className="brand-lockup" aria-label="Sable">
+          <span className="brand-glyph">S</span>
+          <strong>Sable</strong>
+        </div>
         <nav>
           <button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}>
             <LayoutDashboard size={18} /> Overview
