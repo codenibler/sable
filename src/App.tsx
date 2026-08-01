@@ -173,7 +173,7 @@ function Overview({ dashboard, formatMoney }: { dashboard: Dashboard; formatMone
           <div className="panel-heading"><div><p className="section-label">Breakdown</p><h2>Sources</h2></div></div>
           <div className="source-list">
             {dashboard.sources.map((source) => (
-              <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : "₿"}</span><div><strong>{source.name}</strong><small>{source.connected ? source.kind : source.message}</small></div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
+              <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small></div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
             ))}
           </div>
         </div>

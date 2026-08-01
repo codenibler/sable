@@ -9,6 +9,7 @@ Portfolio 1 is a dark, local-first desktop monitor for a Trading 212 Invest acco
 - BTC public addresses and account-level mainnet `xpub`, `ypub`, or `zpub` keys
 - Any number of ETH and SOL public addresses
 - Native BTC, ETH, and SOL balances with EUR pricing
+- Local manual investment sources, including Opessocius balance and net deposits from `.env`
 - Combined and crypto hourly snapshots in local SQLite
 - Resumable Trading 212 cash-history backfill with net deposits, cash-flow-adjusted profit, and annualized MWRR
 - Responsive React interface designed to carry forward to Tauri iOS
@@ -28,7 +29,7 @@ npm run tauri dev
 
 Fill in `TRADING212_API_KEY` and `TRADING212_API_SECRET` using a key with only the account and portfolio read permissions required by the app. Never grant order permissions.
 
-The existing `.env` is ignored by Git. Wallets can be imported at startup with `HWR_BITCOIN_XPUBS`, `HWR_ETHEREUM_ADDRESSES`, and `HWR_SOLANA_ADDRESSES`; comma-separated entries are accepted and repeated starts do not duplicate them. Runtime endpoints, currency, timeouts, snapshot cadence, XPUB scan limits, and the database filename are also configured there. The SQLite database is stored under the operating system's application-data directory, not in this repository.
+The existing `.env` is ignored by Git. Wallets can be imported at startup with `HWR_BITCOIN_XPUBS`, `HWR_ETHEREUM_ADDRESSES`, and `HWR_SOLANA_ADDRESSES`; comma-separated entries are accepted and repeated starts do not duplicate them. Opessocius is updated locally through `OPESSOCIUS_CURRENT_BALANCE` and `OPESSOCIUS_NET_DEPOSITS` and never makes a network request. Runtime endpoints, currency, timeouts, snapshot cadence, XPUB scan limits, and the database filename are also configured there. The SQLite database is stored under the operating system's application-data directory, not in this repository.
 
 ## Verification
 

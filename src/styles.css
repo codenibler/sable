@@ -124,6 +124,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .source-item { display: grid; grid-template-columns: 35px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 13px 4px; border-top: 1px solid var(--line-soft); }
 .source-icon { position: relative; display: grid; width: 32px; height: 32px; place-items: center; border-radius: 8px; background: #1b1d1c; font-family: ui-monospace, "SFMono-Regular", monospace; font-size: var(--font-caption); }
 .source-icon.crypto { color: var(--green); background: var(--green-dim); }
+.source-icon.manual { color: #f5d083; background: #332a18; }
 .source-icon .status-dot { position: absolute; right: -1px; bottom: -1px; }
 .source-item > div:not(.source-value) { display: grid; min-width: 0; }
 .source-item strong { font-size: var(--font-small); }

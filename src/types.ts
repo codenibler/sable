@@ -7,7 +7,7 @@ export type DataPoint = {
 export type SourceSummary = {
   id: string;
   name: string;
-  kind: "brokerage" | "crypto";
+  kind: "brokerage" | "crypto" | "manual";
   value: number;
   returnValue: number;
   connected: boolean;
