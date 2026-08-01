@@ -24,7 +24,7 @@ pub fn run() {
                 .map_err(std::io::Error::other)?;
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(config.http_timeout_seconds))
-                .user_agent("Portfolio-1/0.1")
+                .user_agent("Sable/0.1")
                 .build()?;
             app.manage(AppState {
                 database: std::sync::Mutex::new(database),
@@ -64,7 +64,7 @@ pub fn run() {
             commands::remove_wallet,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Portfolio 1");
+        .expect("error while running Sable");
 }
 
 fn import_configured_wallets(

@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capability for Portfolio 1","local":true,"windows":["main"],"permissions":["core:default"]}}
+{"default":{"identifier":"default","description":"Default capability for Sable","local":true,"windows":["main"],"permissions":["core:default"]}}

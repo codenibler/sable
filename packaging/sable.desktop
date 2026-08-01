@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Portfolio 1
+Name=Sable
 Comment=A private, local-first portfolio monitor
-Exec=/home/codenibler/Applications/Portfolio-1.AppImage
-TryExec=/home/codenibler/Applications/Portfolio-1.AppImage
+Exec=/home/codenibler/Applications/Sable.AppImage
+TryExec=/home/codenibler/Applications/Sable.AppImage
 Path=/home/codenibler/Projects/portfolio_monitor
-Icon=/home/codenibler/.local/share/icons/hicolor/512x512/apps/portfolio-1.png
+Icon=/home/codenibler/.local/share/icons/hicolor/512x512/apps/sable.png
 Terminal=false
 Categories=Office;Finance;
 Keywords=portfolio;investments;stocks;crypto;wallet;

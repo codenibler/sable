@@ -1,6 +1,6 @@
-# Portfolio 1
+# Sable
 
-Portfolio 1 is a dark, local-first desktop monitor for a Trading 212 Invest account and BTC, ETH, and SOL wallets. It shows combined value in EUR, current holdings, source health, profit/loss, and an equity history built from local snapshots.
+Sable is a dark, local-first desktop monitor for a Trading 212 Invest account and BTC, ETH, and SOL wallets. It shows combined value in EUR, current holdings, source health, profit/loss, and an equity history built from local snapshots.
 
 The interface uses [General Sans](https://www.fontshare.com/fonts/general-sans) by Indian Type Foundry, bundled locally under the [Fontshare free-font license](https://www.fontshare.com/licenses/itf-ffl).
 
@@ -17,7 +17,7 @@ The interface uses [General Sans](https://www.fontshare.com/fonts/general-sans) 
 - Responsive React interface designed to carry forward to Tauri iOS
 - Partial-failure handling when one provider is unavailable
 
-Token contracts held by ETH or SOL wallets are not indexed yet. Portfolio 1 will never ask for a private key or seed phrase. Extended public keys are sensitive metadata because they reveal a wallet's address history: keep `.env` private. XPUB derivation happens locally and Blockstream receives only the derived public addresses. All configured providers can still correlate addresses requested from the same connection; use self-hosted endpoints in `.env` if that metadata is sensitive.
+Token contracts held by ETH or SOL wallets are not indexed yet. Sable will never ask for a private key or seed phrase. Extended public keys are sensitive metadata because they reveal a wallet's address history: keep `.env` private. XPUB derivation happens locally and Blockstream receives only the derived public addresses. All configured providers can still correlate addresses requested from the same connection; use self-hosted endpoints in `.env` if that metadata is sensitive.
 
 ## Run locally
 
@@ -44,8 +44,8 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## Omarchy installation
 
-Build the AppImage, copy it to `~/Applications/Portfolio-1.AppImage`, and install
-`packaging/portfolio-1.desktop` under `~/.local/share/applications`. The launcher
+Build the AppImage, copy it to `~/Applications/Sable.AppImage`, and install
+`packaging/sable.desktop` under `~/.local/share/applications`. The launcher
 uses this repository as its working directory so the ignored `.env` remains the
 single credentials source; no secrets are copied into the Applications folder.
 

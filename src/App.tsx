@@ -101,7 +101,7 @@ function App() {
         </header>
 
         {error && (
-          <div className="error-banner"><CircleAlert size={18} /><div><strong>Portfolio 1 could not start</strong><p>{error}</p></div></div>
+          <div className="error-banner"><CircleAlert size={18} /><div><strong>Sable could not start</strong><p>{error}</p></div></div>
         )}
 
         {!dashboard && loading ? <Loading /> : dashboard && view === "overview" ? (
@@ -270,7 +270,7 @@ function WinningsModal({ winnings, currency, onClose, onSaved }: { winnings: Mon
       setSaving(false);
     }
   };
-  return <Modal title={`${winnings.label} winnings`} subtitle={`Add the total Opessocius winnings for ${winnings.label}. Portfolio 1 spreads them evenly across the entire month for return calculations.`} onClose={onClose}><form onSubmit={submit}>
+  return <Modal title={`${winnings.label} winnings`} subtitle={`Add the total Opessocius winnings for ${winnings.label}. Sable spreads them evenly across the entire month for return calculations.`} onClose={onClose}><form onSubmit={submit}>
     <label>Total winnings ({currency})<input autoFocus type="number" min="0" step="0.01" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required /><small className="field-note">Saving replaces the existing value for this month, so edits are never counted twice.</small></label>
     {error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Saving…" : winnings.amount > 0 ? "Update winnings" : "Add winnings"}</button>
   </form></Modal>;
