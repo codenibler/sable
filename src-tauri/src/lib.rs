@@ -20,7 +20,9 @@ pub fn run() {
             fs::create_dir_all(&data_directory)?;
             let database = db::open(&data_directory.join(&config.database_filename))
                 .map_err(std::io::Error::other)?;
-            db::ensure_portfolio(&database).map_err(std::io::Error::other)?;
+            let portfolio_id = db::ensure_portfolio(&database).map_err(std::io::Error::other)?;
+            import_configured_wallets(&database, portfolio_id, &config)
+                .map_err(std::io::Error::other)?;
             let client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(config.http_timeout_seconds))
                 .user_agent("Portfolio-1/0.1")
@@ -63,4 +65,38 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Portfolio 1");
+}
+
+fn import_configured_wallets(
+    database: &rusqlite::Connection,
+    portfolio_id: i64,
+    config: &config::Config,
+) -> Result<(), String> {
+    for (network, values, label) in [
+        ("btc-xpub", &config.configured_bitcoin_xpubs, "Bitcoin XPUB"),
+        (
+            "eth",
+            &config.configured_ethereum_addresses,
+            "Ethereum wallet",
+        ),
+        ("sol", &config.configured_solana_addresses, "Solana wallet"),
+    ] {
+        for value in values {
+            let validated = providers::crypto::validate_wallet(network, value)
+                .map_err(|error| format!("Configured {label} is invalid: {error}"))?;
+            match db::add_wallet(
+                database,
+                portfolio_id,
+                &validated.network,
+                value,
+                label,
+                &validated.wallet_type,
+            ) {
+                Ok(_) => {}
+                Err(error) if error == "This wallet is already in the portfolio" => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(())
 }

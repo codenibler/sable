@@ -21,3 +21,5 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 dotenvy = "0.15.7"
 tokio = { version = "1.53.1", features = ["sync", "time"] }
+bitcoin = "0.32.10"
+futures-util = "0.3.33"

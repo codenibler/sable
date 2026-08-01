@@ -1,7 +1,9 @@
 use reqwest::Client;
 use serde_json::{Value, json};
 
-use crate::{config::Config, models::Wallet};
+use chrono::{DateTime, Duration, Utc};
+
+use crate::{config::Config, models::Wallet, providers::bitcoin_xpub};
 
 pub async fn prices(client: &Client, config: &Config) -> Result<AssetPrices, String> {
     let response: Value = client
@@ -43,7 +45,30 @@ pub async fn hydrate_wallet(
     config: &Config,
     wallet: &mut Wallet,
     prices: &AssetPrices,
-) {
+) -> bool {
+    if wallet.network == "btc" && wallet.wallet_type == "xpub" {
+        if cache_is_fresh(wallet, config.xpub_refresh_interval_minutes) {
+            wallet.symbol = "BTC".to_string();
+            wallet.value = wallet.balance * prices.btc;
+            wallet.message = None;
+            return false;
+        }
+        match bitcoin_xpub::scan(client, config, &wallet.address).await {
+            Ok(result) => {
+                wallet.balance = result.balance;
+                wallet.address_count = result.address_count;
+                wallet.symbol = "BTC".to_string();
+                wallet.value = result.balance * prices.btc;
+                wallet.message = None;
+                return true;
+            }
+            Err(message) => {
+                wallet.value = wallet.balance * prices.btc;
+                wallet.message = Some(message);
+                return false;
+            }
+        }
+    }
     let result = match wallet.network.as_str() {
         "btc" => btc_balance(client, config, &wallet.address)
             .await
@@ -65,11 +90,27 @@ pub async fn hydrate_wallet(
         }
         Err(message) => wallet.message = Some(message),
     }
+    false
 }
 
-pub fn validate_address(network: &str, address: &str) -> Result<String, String> {
+pub struct ValidatedWallet {
+    pub network: String,
+    pub wallet_type: String,
+}
+
+pub fn validate_wallet(network: &str, address: &str) -> Result<ValidatedWallet, String> {
     let normalized_network = network.trim().to_lowercase();
     let address = address.trim();
+    let is_extended_key = ["xpub", "ypub", "zpub"]
+        .iter()
+        .any(|prefix| address.starts_with(prefix));
+    if normalized_network == "btc-xpub" || (normalized_network == "btc" && is_extended_key) {
+        bitcoin_xpub::validate(address)?;
+        return Ok(ValidatedWallet {
+            network: "btc".to_string(),
+            wallet_type: "xpub".to_string(),
+        });
+    }
     let valid = match normalized_network.as_str() {
         "btc" => {
             (address.starts_with('1')
@@ -90,16 +131,29 @@ pub fn validate_address(network: &str, address: &str) -> Result<String, String> 
                     "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".contains(character)
                 })
         }
-        _ => return Err("Network must be BTC, ETH, or SOL".to_string()),
+        _ => return Err("Network must be BTC, BTC XPUB, ETH, or SOL".to_string()),
     };
     if valid {
-        Ok(normalized_network)
+        Ok(ValidatedWallet {
+            network: normalized_network,
+            wallet_type: "address".to_string(),
+        })
     } else {
         Err(format!(
             "That does not look like a valid {} address",
             normalized_network.to_uppercase()
         ))
     }
+}
+
+fn cache_is_fresh(wallet: &Wallet, refresh_interval_minutes: i64) -> bool {
+    wallet
+        .last_checked_at
+        .as_deref()
+        .and_then(|value| value.parse::<DateTime<Utc>>().ok())
+        .is_some_and(|checked| {
+            Utc::now() - checked < Duration::minutes(refresh_interval_minutes.max(0))
+        })
 }
 
 pub struct AssetPrices {
@@ -211,18 +265,18 @@ fn provider_status(error: reqwest::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_address;
+    use super::validate_wallet;
 
     #[test]
     fn validates_supported_wallet_shapes() {
-        assert!(validate_address("eth", "0x0000000000000000000000000000000000000000").is_ok());
-        assert!(validate_address("btc", "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh").is_ok());
-        assert!(validate_address("sol", "11111111111111111111111111111111").is_ok());
+        assert!(validate_wallet("eth", "0x0000000000000000000000000000000000000000").is_ok());
+        assert!(validate_wallet("btc", "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh").is_ok());
+        assert!(validate_wallet("sol", "11111111111111111111111111111111").is_ok());
     }
 
     #[test]
     fn rejects_unknown_networks_and_malformed_addresses() {
-        assert!(validate_address("doge", "anything").is_err());
-        assert!(validate_address("eth", "0x123").is_err());
+        assert!(validate_wallet("doge", "anything").is_err());
+        assert!(validate_wallet("eth", "0x123").is_err());
     }
 }

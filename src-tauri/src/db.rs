@@ -28,6 +28,10 @@ fn initialize(connection: &Connection) -> Result<(), String> {
                 network TEXT NOT NULL,
                 address TEXT NOT NULL,
                 label TEXT NOT NULL,
+                wallet_type TEXT NOT NULL DEFAULT 'address',
+                cached_balance REAL NOT NULL DEFAULT 0,
+                cached_address_count INTEGER NOT NULL DEFAULT 0,
+                last_checked_at TEXT,
                 created_at TEXT NOT NULL,
                 UNIQUE(network, address, portfolio_id)
              );
@@ -60,7 +64,31 @@ fn initialize(connection: &Connection) -> Result<(), String> {
              );",
         )
         .map_err(to_string)?;
+    add_column_if_missing(
+        connection,
+        "ALTER TABLE wallets ADD COLUMN wallet_type TEXT NOT NULL DEFAULT 'address'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ALTER TABLE wallets ADD COLUMN cached_balance REAL NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ALTER TABLE wallets ADD COLUMN cached_address_count INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ALTER TABLE wallets ADD COLUMN last_checked_at TEXT",
+    )?;
     Ok(())
+}
+
+fn add_column_if_missing(connection: &Connection, statement: &str) -> Result<(), String> {
+    match connection.execute(statement, []) {
+        Ok(_) => Ok(()),
+        Err(error) if error.to_string().contains("duplicate column name") => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 pub fn history_sync_state(connection: &Connection) -> Result<HistorySyncState, String> {
@@ -206,7 +234,8 @@ pub fn list_portfolios(connection: &Connection) -> Result<Vec<CryptoPortfolio>, 
 fn list_wallets(connection: &Connection, portfolio_id: i64) -> Result<Vec<Wallet>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT id, portfolio_id, network, address, label
+            "SELECT id, portfolio_id, network, address, label, wallet_type,
+                    cached_balance, cached_address_count, last_checked_at
              FROM wallets WHERE portfolio_id = ?1 ORDER BY created_at, id",
         )
         .map_err(to_string)?;
@@ -220,9 +249,12 @@ fn list_wallets(connection: &Connection, portfolio_id: i64) -> Result<Vec<Wallet
                 network,
                 address: row.get(3)?,
                 label: row.get(4)?,
-                balance: 0.0,
+                wallet_type: row.get(5)?,
+                balance: row.get(6)?,
+                address_count: row.get::<_, i64>(7)?.max(0) as usize,
                 value: 0.0,
                 message: None,
+                last_checked_at: row.get(8)?,
             })
         })
         .map_err(to_string)?;
@@ -257,16 +289,18 @@ pub fn add_wallet(
     network: &str,
     address: &str,
     label: &str,
+    wallet_type: &str,
 ) -> Result<i64, String> {
     connection
         .execute(
-            "INSERT INTO wallets(portfolio_id, network, address, label, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO wallets(portfolio_id, network, address, label, wallet_type, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 portfolio_id,
                 network,
                 address.trim(),
                 label.trim(),
+                wallet_type,
                 Utc::now().to_rfc3339()
             ],
         )
@@ -278,6 +312,22 @@ pub fn add_wallet(
             }
         })?;
     Ok(connection.last_insert_rowid())
+}
+
+pub fn update_wallet_cache(
+    connection: &Connection,
+    id: i64,
+    balance: f64,
+    address_count: usize,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "UPDATE wallets SET cached_balance = ?1, cached_address_count = ?2,
+                    last_checked_at = ?3 WHERE id = ?4",
+            params![balance, address_count as i64, Utc::now().to_rfc3339(), id],
+        )
+        .map_err(to_string)?;
+    Ok(())
 }
 
 pub fn remove_wallet(connection: &Connection, id: i64) -> Result<(), String> {
@@ -398,6 +448,7 @@ mod tests {
             "eth",
             "0x0000000000000000000000000000000000000000",
             "Ledger",
+            "address",
         )
         .expect("wallet");
 

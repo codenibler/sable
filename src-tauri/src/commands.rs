@@ -54,9 +54,18 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     };
 
     if let Some(Ok(prices)) = &price_result {
+        let mut cache_updates = Vec::new();
         for portfolio in &mut portfolios {
             for wallet in &mut portfolio.wallets {
-                crypto::hydrate_wallet(&state.client, &state.config, wallet, prices).await;
+                if crypto::hydrate_wallet(&state.client, &state.config, wallet, prices).await {
+                    cache_updates.push((wallet.id, wallet.balance, wallet.address_count));
+                }
+            }
+        }
+        if !cache_updates.is_empty() {
+            let database = state.database.lock().map_err(|_| "Database lock failed")?;
+            for (id, balance, address_count) in cache_updates {
+                db::update_wallet_cache(&database, id, balance, address_count)?;
             }
         }
     } else if let Some(Err(message)) = &price_result {
@@ -319,9 +328,13 @@ pub fn list_crypto_portfolios(state: State<'_, AppState>) -> Result<Vec<CryptoPo
 
 #[tauri::command]
 pub fn add_wallet(state: State<'_, AppState>, input: AddWalletInput) -> Result<i64, String> {
-    let network = crypto::validate_address(&input.network, &input.address)?;
+    let validated = crypto::validate_wallet(&input.network, &input.address)?;
     let label = if input.label.trim().is_empty() {
-        format!("{} wallet", network.to_uppercase())
+        if validated.wallet_type == "xpub" {
+            "Bitcoin XPUB".to_string()
+        } else {
+            format!("{} wallet", validated.network.to_uppercase())
+        }
     } else {
         input.label.trim().to_string()
     };
@@ -332,9 +345,10 @@ pub fn add_wallet(state: State<'_, AppState>, input: AddWalletInput) -> Result<i
     db::add_wallet(
         &database,
         input.portfolio_id,
-        &network,
+        &validated.network,
         &input.address,
         &label,
+        &validated.wallet_type,
     )
 }
 

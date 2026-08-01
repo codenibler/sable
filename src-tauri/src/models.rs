@@ -73,10 +73,14 @@ pub struct Wallet {
     pub network: String,
     pub address: String,
     pub label: String,
+    pub wallet_type: String,
+    pub address_count: usize,
     pub balance: f64,
     pub symbol: String,
     pub value: f64,
     pub message: Option<String>,
+    #[serde(skip_serializing)]
+    pub last_checked_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

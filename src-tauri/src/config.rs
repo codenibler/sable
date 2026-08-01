@@ -17,6 +17,13 @@ pub struct Config {
     pub trading212_history_max_pages: usize,
     pub history_sync_interval_minutes: i64,
     pub history_backfill_retry_seconds: u64,
+    pub xpub_gap_limit: usize,
+    pub xpub_scan_concurrency: usize,
+    pub xpub_max_addresses_per_branch: usize,
+    pub xpub_refresh_interval_minutes: i64,
+    pub configured_bitcoin_xpubs: Vec<String>,
+    pub configured_ethereum_addresses: Vec<String>,
+    pub configured_solana_addresses: Vec<String>,
 }
 
 impl Config {
@@ -50,6 +57,16 @@ impl Config {
             history_backfill_retry_seconds: required("HISTORY_BACKFILL_RETRY_SECONDS")?
                 .parse()
                 .map_err(|_| "HISTORY_BACKFILL_RETRY_SECONDS must be a whole number".to_string())?,
+            xpub_gap_limit: whole_number("XPUB_GAP_LIMIT")?.clamp(1, 100),
+            xpub_scan_concurrency: whole_number("XPUB_SCAN_CONCURRENCY")?.clamp(1, 16),
+            xpub_max_addresses_per_branch: whole_number("XPUB_MAX_ADDRESSES_PER_BRANCH")?
+                .clamp(20, 5_000),
+            xpub_refresh_interval_minutes: required("XPUB_REFRESH_INTERVAL_MINUTES")?
+                .parse()
+                .map_err(|_| "XPUB_REFRESH_INTERVAL_MINUTES must be a whole number".to_string())?,
+            configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
+            configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
+            configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
         })
     }
 
@@ -81,4 +98,25 @@ fn optional(key: &str) -> Option<String> {
 
 fn required(key: &str) -> Result<String, String> {
     optional(key).ok_or_else(|| format!("Missing required configuration: {key}"))
+}
+
+fn whole_number(key: &str) -> Result<usize, String> {
+    required(key)?
+        .parse()
+        .map_err(|_| format!("{key} must be a whole number"))
+}
+
+fn configured_list(key: &str) -> Vec<String> {
+    optional(key)
+        .map(|value| {
+            value
+                .split(|character: char| {
+                    character == ',' || character == ';' || character.is_whitespace()
+                })
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
