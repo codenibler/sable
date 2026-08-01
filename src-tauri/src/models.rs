@@ -71,7 +71,9 @@ pub struct Wallet {
     pub id: i64,
     pub portfolio_id: i64,
     pub network: String,
+    #[serde(skip_serializing)]
     pub address: String,
+    pub display_address: String,
     pub label: String,
     pub wallet_type: String,
     pub address_count: usize,

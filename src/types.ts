@@ -30,7 +30,7 @@ export type Wallet = {
   id: number;
   portfolioId: number;
   network: "btc" | "eth" | "sol";
-  address: string;
+  displayAddress: string;
   label: string;
   walletType: "address" | "xpub";
   addressCount: number;

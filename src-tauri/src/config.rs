@@ -61,9 +61,8 @@ impl Config {
             xpub_scan_concurrency: whole_number("XPUB_SCAN_CONCURRENCY")?.clamp(1, 16),
             xpub_max_addresses_per_branch: whole_number("XPUB_MAX_ADDRESSES_PER_BRANCH")?
                 .clamp(20, 5_000),
-            xpub_refresh_interval_minutes: required("XPUB_REFRESH_INTERVAL_MINUTES")?
-                .parse()
-                .map_err(|_| "XPUB_REFRESH_INTERVAL_MINUTES must be a whole number".to_string())?,
+            xpub_refresh_interval_minutes: whole_number("XPUB_REFRESH_INTERVAL_MINUTES")?
+                .clamp(1, 10_080) as i64,
             configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
             configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),

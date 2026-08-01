@@ -242,14 +242,22 @@ fn list_wallets(connection: &Connection, portfolio_id: i64) -> Result<Vec<Wallet
     let rows = statement
         .query_map([portfolio_id], |row| {
             let network: String = row.get(2)?;
+            let address: String = row.get(3)?;
+            let wallet_type: String = row.get(5)?;
+            let display_address = if wallet_type == "xpub" {
+                "Extended public key".to_string()
+            } else {
+                address.clone()
+            };
             Ok(Wallet {
                 id: row.get(0)?,
                 portfolio_id: row.get(1)?,
                 symbol: network.to_uppercase(),
                 network,
-                address: row.get(3)?,
+                address,
+                display_address,
                 label: row.get(4)?,
-                wallet_type: row.get(5)?,
+                wallet_type,
                 balance: row.get(6)?,
                 address_count: row.get::<_, i64>(7)?.max(0) as usize,
                 value: 0.0,
@@ -456,6 +464,40 @@ mod tests {
         assert_eq!(portfolios.len(), 1);
         assert_eq!(portfolios[0].wallets.len(), 1);
         assert_eq!(portfolios[0].wallets[0].label, "Ledger");
+        assert_eq!(portfolios[0].wallets[0].wallet_type, "address");
+    }
+
+    #[test]
+    fn migrates_wallets_created_before_xpub_support() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        database
+            .execute_batch(
+                "CREATE TABLE portfolios (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                 );
+                 CREATE TABLE wallets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    portfolio_id INTEGER NOT NULL,
+                    network TEXT NOT NULL,
+                    address TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(network, address, portfolio_id)
+                 );
+                 INSERT INTO portfolios(name, created_at) VALUES ('Crypto', '2026-01-01T00:00:00Z');
+                 INSERT INTO wallets(portfolio_id, network, address, label, created_at)
+                 VALUES (1, 'btc', 'bc1qexample', 'Existing wallet', '2026-01-01T00:00:00Z');",
+            )
+            .expect("legacy schema");
+
+        initialize(&database).expect("migration");
+        let portfolios = list_portfolios(&database).expect("portfolio list");
+        let wallet = &portfolios[0].wallets[0];
+        assert_eq!(wallet.wallet_type, "address");
+        assert_eq!(wallet.balance, 0.0);
+        assert_eq!(wallet.address_count, 0);
     }
 
     #[test]
