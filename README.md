@@ -11,7 +11,7 @@ The interface uses [General Sans](https://www.fontshare.com/fonts/general-sans) 
 - BTC public addresses and account-level mainnet `xpub`, `ypub`, or `zpub` keys
 - Any number of ETH and SOL public addresses
 - Native BTC, ETH, and SOL balances with EUR pricing
-- Local manual investment sources, including Opessocius balance and net deposits from `.env`
+- Local Opessocius baseline from `.env` with editable previous-month winnings stored in SQLite
 - Combined and crypto hourly snapshots in local SQLite
 - Resumable Trading 212 cash-history backfill with net deposits and simple total return
 - Responsive React interface designed to carry forward to Tauri iOS
@@ -31,7 +31,7 @@ npm run tauri dev
 
 Fill in `TRADING212_API_KEY` and `TRADING212_API_SECRET` using a key with only the account and portfolio read permissions required by the app. Never grant order permissions.
 
-The existing `.env` is ignored by Git. Wallets can be imported at startup with `HWR_BITCOIN_XPUBS`, `HWR_ETHEREUM_ADDRESSES`, and `HWR_SOLANA_ADDRESSES`; comma-separated entries are accepted and repeated starts do not duplicate them. Opessocius is updated locally through `OPESSOCIUS_CURRENT_BALANCE` and `OPESSOCIUS_NET_DEPOSITS` and never makes a network request. Runtime endpoints, currency, timeouts, snapshot cadence, XPUB scan limits, and the database filename are also configured there. The SQLite database is stored under the operating system's application-data directory, not in this repository.
+The existing `.env` is ignored by Git. Wallets can be imported at startup with `HWR_BITCOIN_XPUBS`, `HWR_ETHEREUM_ADDRESSES`, and `HWR_SOLANA_ADDRESSES`; comma-separated entries are accepted and repeated starts do not duplicate them. Opessocius uses `OPESSOCIUS_CURRENT_BALANCE` and `OPESSOCIUS_NET_DEPOSITS` as its baseline and never makes a network request. The UI can add or edit the previous calendar month's winnings; these are stored locally, added to the balance once, and distributed evenly over that month for chart and period-return calculations. Runtime endpoints, currency, timeouts, snapshot cadence, XPUB scan limits, and the database filename are also configured there. The SQLite database is stored under the operating system's application-data directory, not in this repository.
 
 ## Verification
 

@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { PerformanceChart } from "./components/PerformanceChart";
-import type { AddWalletInput, CryptoPortfolio, Dashboard, PeriodReturn } from "./types";
+import type { AddWalletInput, CryptoPortfolio, Dashboard, MonthlyWinnings, PeriodReturn } from "./types";
 
 type View = "overview" | "wallets";
 
@@ -27,6 +27,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [walletModal, setWalletModal] = useState(false);
+  const [winningsModal, setWinningsModal] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -104,7 +105,7 @@ function App() {
         )}
 
         {!dashboard && loading ? <Loading /> : dashboard && view === "overview" ? (
-          <Overview dashboard={dashboard} formatMoney={formatMoney} />
+          <Overview dashboard={dashboard} formatMoney={formatMoney} onAddWinnings={() => setWinningsModal(true)} />
         ) : dashboard ? (
           <Wallets
             portfolios={dashboard.portfolios}
@@ -118,11 +119,14 @@ function App() {
       {walletModal && dashboard && (
         <WalletModal portfolios={dashboard.portfolios} onClose={() => setWalletModal(false)} onSaved={async () => { setWalletModal(false); await refresh(); }} />
       )}
+      {winningsModal && dashboard && (
+        <WinningsModal winnings={dashboard.opessociusPreviousMonth} currency={dashboard.currency} onClose={() => setWinningsModal(false)} onSaved={async () => { setWinningsModal(false); await refresh(); }} />
+      )}
     </div>
   );
 }
 
-function Overview({ dashboard, formatMoney }: { dashboard: Dashboard; formatMoney: (value: number) => string }) {
+function Overview({ dashboard, formatMoney, onAddWinnings }: { dashboard: Dashboard; formatMoney: (value: number) => string; onAddWinnings: () => void }) {
   const positive = dashboard.totalReturn >= 0;
   return (
     <div className="view-stack">
@@ -175,7 +179,7 @@ function Overview({ dashboard, formatMoney }: { dashboard: Dashboard; formatMone
             <div className="panel-heading"><div><p className="section-label">Breakdown</p><h2>Sources</h2></div></div>
             <div className="source-list">
               {dashboard.sources.map((source) => (
-                <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small></div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
+                <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div className="source-copy"><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small>{source.id === "opessocius" && <button className="source-action" onClick={onAddWinnings}>{dashboard.opessociusPreviousMonth.amount > 0 ? "Edit winnings" : "Add winnings"}</button>}</div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
               ))}
             </div>
           </div>
@@ -242,6 +246,33 @@ function WalletModal({ portfolios, onClose, onSaved }: { portfolios: CryptoPortf
     <label>{isXpub ? "Extended public key" : "Wallet address"}<input autoFocus value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} placeholder={form.network === "eth" ? "0x…" : form.network === "btc" ? "bc1…" : isXpub ? "xpub… / ypub… / zpub…" : "Public address"} required />{isXpub && <small className="field-note">Mainnet account-level keys only. Derivation happens locally; only derived addresses are queried.</small>}</label>
     <label>Label <span>optional</span><input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} placeholder="Cold wallet" /></label>
     {error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Adding…" : "Add wallet"}</button>
+  </form></Modal>;
+}
+
+function WinningsModal({ winnings, currency, onClose, onSaved }: { winnings: MonthlyWinnings; currency: string; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [amount, setAmount] = useState(winnings.amount > 0 ? String(winnings.amount) : "");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const parsed = Number(amount);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setError("Enter a non-negative winnings amount.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.setOpessociusPreviousMonthWinnings(parsed);
+      await onSaved();
+    } catch (caught) {
+      setError(messageOf(caught));
+      setSaving(false);
+    }
+  };
+  return <Modal title={`${winnings.label} winnings`} subtitle={`Add the total Opessocius winnings for ${winnings.label}. Portfolio 1 spreads them evenly across the entire month for return calculations.`} onClose={onClose}><form onSubmit={submit}>
+    <label>Total winnings ({currency})<input autoFocus type="number" min="0" step="0.01" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required /><small className="field-note">Saving replaces the existing value for this month, so edits are never counted twice.</small></label>
+    {error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Saving…" : winnings.amount > 0 ? "Update winnings" : "Add winnings"}</button>
   </form></Modal>;
 }
 

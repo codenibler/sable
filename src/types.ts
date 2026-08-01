@@ -56,6 +56,7 @@ export type Dashboard = {
   returnPercent: number;
   monthlyReturn: PeriodReturn;
   yearlyReturn: PeriodReturn;
+  opessociusPreviousMonth: MonthlyWinnings;
   netContributions: number;
   historyEventCount: number;
   historyBackfillComplete: boolean;
@@ -66,6 +67,12 @@ export type Dashboard = {
   holdings: Holding[];
   portfolios: CryptoPortfolio[];
   notices: string[];
+};
+
+export type MonthlyWinnings = {
+  month: string;
+  label: string;
+  amount: number;
 };
 
 export type PeriodReturn = {

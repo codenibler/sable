@@ -160,10 +160,13 @@ tbody tr:last-child td { border-bottom: 0; }
 .source-icon.manual { color: #f5d083; background: #332a18; }
 .source-icon .status-dot { position: absolute; right: -1px; bottom: -1px; }
 .source-item > div:not(.source-value) { display: grid; min-width: 0; }
+.source-copy { align-content: start; }
 .source-item strong { font-size: var(--font-small); }
 .source-item small { overflow: hidden; margin-top: 3px; color: #5f6461; font-size: var(--font-caption); text-overflow: ellipsis; white-space: nowrap; }
 .source-value { display: grid; text-align: right; }
 .source-value strong { font-variant-numeric: tabular-nums; }
+.source-action { width: max-content; margin-top: 7px; padding: 0; border: 0; color: #f5d083; background: transparent; font-size: var(--font-caption); cursor: pointer; }
+.source-action:hover { color: #ffe4a8; }
 .period-return-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line-soft); background: var(--line-soft); gap: 1px; }
 .period-return-item { min-width: 0; padding: 17px 18px 16px; background: var(--surface); }
 .period-return-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #777d79; font-size: var(--font-caption); }
