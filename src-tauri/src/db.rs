@@ -3,7 +3,9 @@ use std::path::Path;
 use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::models::{CashEvent, CryptoPortfolio, DataPoint, HistorySyncState, Wallet};
+use crate::models::{
+    CashEvent, CashFlow, CashHistorySummary, CryptoPortfolio, DataPoint, HistorySyncState, Wallet,
+};
 
 pub fn open(path: &Path) -> Result<Connection, String> {
     let connection = Connection::open(path).map_err(to_string)?;
@@ -133,10 +135,48 @@ pub fn save_history_sync_state(
     Ok(())
 }
 
+#[cfg(test)]
 pub fn cash_event_count(connection: &Connection) -> Result<i64, String> {
     connection
         .query_row("SELECT COUNT(*) FROM cash_events", [], |row| row.get(0))
         .map_err(to_string)
+}
+
+pub fn cash_history_summary(connection: &Connection) -> Result<CashHistorySummary, String> {
+    let state = history_sync_state(connection)?;
+    let (event_count, net_contributions): (i64, f64) = connection
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(
+                CASE WHEN event_type IN ('DEPOSIT', 'WITHDRAW', 'WITHDRAWAL')
+                     THEN amount_eur ELSE 0 END
+             ), 0) FROM cash_events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(to_string)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT occurred_at, amount_eur FROM cash_events
+             WHERE event_type IN ('DEPOSIT', 'WITHDRAW', 'WITHDRAWAL')
+             ORDER BY occurred_at",
+        )
+        .map_err(to_string)?;
+    let flows = statement
+        .query_map([], |row| {
+            Ok(CashFlow {
+                occurred_at: row.get(0)?,
+                amount: row.get(1)?,
+            })
+        })
+        .map_err(to_string)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(to_string)?;
+    Ok(CashHistorySummary {
+        net_contributions,
+        event_count,
+        backfill_complete: state.backfill_complete,
+        flows,
+    })
 }
 
 pub fn list_portfolios(connection: &Connection) -> Result<Vec<CryptoPortfolio>, String> {

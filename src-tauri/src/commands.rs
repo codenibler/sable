@@ -1,6 +1,6 @@
-use std::sync::Mutex;
+use std::{collections::HashMap, sync::Mutex};
 
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use reqwest::Client;
 use rusqlite::Connection;
 use tauri::State;
@@ -8,7 +8,10 @@ use tauri::State;
 use crate::{
     config::Config,
     db,
-    models::{AddWalletInput, CryptoPortfolio, Dashboard, Holding, SourceSummary},
+    models::{
+        AddWalletInput, CryptoPortfolio, Dashboard, HistorySyncState, Holding, SourceSummary,
+    },
+    performance,
     providers::{crypto, trading212},
 };
 
@@ -25,6 +28,15 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         db::list_portfolios(&database)?
     };
 
+    let history_sync_error = if state.config.trading212_is_configured() {
+        sync_trading_history(&state).await.err()
+    } else {
+        None
+    };
+    let cash_history = {
+        let database = state.database.lock().map_err(|_| "Database lock failed")?;
+        db::cash_history_summary(&database)?
+    };
     let trading_result = if state.config.trading212_is_configured() {
         trading212::fetch_overview(&state.client, &state.config).await
     } else {
@@ -57,14 +69,28 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     let mut notices = Vec::new();
     let mut sources = Vec::new();
     let mut holdings = Vec::new();
+    if let Some(message) = history_sync_error {
+        notices.push(format!("Cash history sync paused: {message}"));
+    } else if !cash_history.backfill_complete && cash_history.event_count > 0 {
+        notices.push(format!(
+            "Trading 212 history backfill is in progress ({} events stored). Refresh later to continue.",
+            cash_history.event_count
+        ));
+    }
+    let history_is_usable = cash_history.backfill_complete && cash_history.event_count > 0;
     let (trading_value, trading_invested, cash_value, trading_return) = match trading_result {
         Ok(overview) => {
+            let contribution_adjusted_return = if history_is_usable {
+                overview.total_value - cash_history.net_contributions
+            } else {
+                overview.return_value
+            };
             sources.push(SourceSummary {
                 id: "trading212".to_string(),
                 name: "Trading 212".to_string(),
                 kind: "brokerage".to_string(),
                 value: overview.total_value,
-                return_value: overview.return_value,
+                return_value: contribution_adjusted_return,
                 connected: true,
                 message: None,
             });
@@ -73,7 +99,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                 overview.total_value,
                 overview.invested_value,
                 overview.cash_value,
-                overview.return_value,
+                contribution_adjusted_return,
             )
         }
         Err(message) => {
@@ -145,7 +171,11 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         }
 
         let total_value = trading_value + crypto_value;
-        let invested_value = trading_invested + crypto_invested;
+        let invested_value = if history_is_usable {
+            cash_history.net_contributions + crypto_invested
+        } else {
+            trading_invested + crypto_invested
+        };
         db::save_snapshot(
             &database,
             "total",
@@ -166,6 +196,16 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     let total_value = trading_value + crypto_value;
     let invested_value = trading_invested + crypto_invested;
     let total_return = trading_return + crypto_return;
+    let contribution_basis = if history_is_usable {
+        cash_history.net_contributions + crypto_invested
+    } else {
+        invested_value
+    };
+    let money_weighted_return_percent = if history_is_usable {
+        performance::money_weighted_return(&cash_history.flows, trading_value, Utc::now())
+    } else {
+        None
+    };
     for holding in &mut holdings {
         holding.allocation = if total_value > 0.0 {
             holding.value / total_value * 100.0
@@ -185,11 +225,15 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         invested_value,
         cash_value,
         total_return,
-        return_percent: if invested_value > 0.0 {
-            total_return / invested_value * 100.0
+        return_percent: if contribution_basis > 0.0 {
+            total_return / contribution_basis * 100.0
         } else {
             0.0
         },
+        net_contributions: cash_history.net_contributions,
+        money_weighted_return_percent,
+        history_event_count: cash_history.event_count,
+        history_backfill_complete: cash_history.backfill_complete,
         currency: state.config.base_currency.clone(),
         updated_at: Utc::now().to_rfc3339(),
         history,
@@ -198,6 +242,71 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         portfolios,
         notices,
     })
+}
+
+async fn sync_trading_history(state: &AppState) -> Result<(), String> {
+    let sync_state = {
+        let database = state.database.lock().map_err(|_| "Database lock failed")?;
+        db::history_sync_state(&database)?
+    };
+    if !history_sync_is_due(&sync_state, state.config.history_sync_interval_minutes) {
+        return Ok(());
+    }
+
+    let incremental = sync_state.backfill_complete;
+    let mut path = if incremental {
+        "/equity/history/transactions?limit=50".to_string()
+    } else {
+        sync_state
+            .next_path
+            .unwrap_or_else(|| "/equity/history/transactions?limit=50".to_string())
+    };
+    let page_limit = if incremental {
+        1
+    } else {
+        state.config.trading212_history_max_pages
+    };
+
+    for _ in 0..page_limit {
+        let page = trading212::fetch_transaction_page(&state.client, &state.config, &path).await?;
+        let mut rates = HashMap::new();
+        let mut converted = Vec::with_capacity(page.events.len());
+        for event in page.events {
+            let rate = if let Some(rate) = rates.get(&event.currency) {
+                *rate
+            } else {
+                let rate = trading212::currency_rate(&state.client, &state.config, &event.currency)
+                    .await?;
+                rates.insert(event.currency.clone(), rate);
+                rate
+            };
+            converted.push((event, rate));
+        }
+
+        let next_path = if incremental { None } else { page.next_path };
+        let complete = incremental || next_path.is_none();
+        {
+            let database = state.database.lock().map_err(|_| "Database lock failed")?;
+            db::save_cash_events(&database, &converted)?;
+            db::save_history_sync_state(&database, next_path.as_deref(), complete)?;
+        }
+        if complete {
+            break;
+        }
+        path = next_path.expect("incomplete history page must have a next path");
+    }
+    Ok(())
+}
+
+fn history_sync_is_due(state: &HistorySyncState, interval_minutes: i64) -> bool {
+    if !state.backfill_complete {
+        return true;
+    }
+    state
+        .last_synced_at
+        .as_deref()
+        .and_then(|value| value.parse::<DateTime<Utc>>().ok())
+        .is_none_or(|last_sync| Utc::now() - last_sync >= Duration::minutes(interval_minutes))
 }
 
 #[tauri::command]
