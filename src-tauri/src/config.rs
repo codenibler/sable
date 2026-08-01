@@ -18,7 +18,7 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, String> {
-        let _ = dotenvy::dotenv();
+        load_dotenv();
 
         Ok(Self {
             trading212_api_key: optional("TRADING212_API_KEY"),
@@ -42,6 +42,23 @@ impl Config {
 
     pub fn trading212_is_configured(&self) -> bool {
         self.trading212_api_key.is_some() && self.trading212_api_secret.is_some()
+    }
+}
+
+fn load_dotenv() {
+    if dotenvy::dotenv().is_ok() {
+        return;
+    }
+    let Ok(executable) = env::current_exe() else {
+        return;
+    };
+    if let Some(path) = executable
+        .ancestors()
+        .skip(1)
+        .map(|directory| directory.join(".env"))
+        .find(|candidate| candidate.is_file())
+    {
+        let _ = dotenvy::from_path(path);
     }
 }
 
