@@ -55,7 +55,6 @@ export type Dashboard = {
   totalReturn: number;
   returnPercent: number;
   netContributions: number;
-  moneyWeightedReturnPercent: number | null;
   historyEventCount: number;
   historyBackfillComplete: boolean;
   currency: string;

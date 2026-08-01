@@ -4,7 +4,7 @@ use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::models::{
-    CashEvent, CashFlow, CashHistorySummary, CryptoPortfolio, DataPoint, HistorySyncState, Wallet,
+    CashEvent, CashHistorySummary, CryptoPortfolio, DataPoint, HistorySyncState, Wallet,
 };
 
 pub fn open(path: &Path) -> Result<Connection, String> {
@@ -182,28 +182,10 @@ pub fn cash_history_summary(connection: &Connection) -> Result<CashHistorySummar
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(to_string)?;
-    let mut statement = connection
-        .prepare(
-            "SELECT occurred_at, amount_eur FROM cash_events
-             WHERE event_type IN ('DEPOSIT', 'WITHDRAW', 'WITHDRAWAL')
-             ORDER BY occurred_at",
-        )
-        .map_err(to_string)?;
-    let flows = statement
-        .query_map([], |row| {
-            Ok(CashFlow {
-                occurred_at: row.get(0)?,
-                amount: row.get(1)?,
-            })
-        })
-        .map_err(to_string)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(to_string)?;
     Ok(CashHistorySummary {
         net_contributions,
         event_count,
         backfill_complete: state.backfill_complete,
-        flows,
     })
 }
 

@@ -9,7 +9,6 @@ pub struct Dashboard {
     pub total_return: f64,
     pub return_percent: f64,
     pub net_contributions: f64,
-    pub money_weighted_return_percent: Option<f64>,
     pub history_event_count: i64,
     pub history_backfill_complete: bool,
     pub currency: String,
@@ -125,16 +124,9 @@ pub struct HistorySyncState {
     pub last_synced_at: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct CashFlow {
-    pub occurred_at: String,
-    pub amount: f64,
-}
-
 #[derive(Debug)]
 pub struct CashHistorySummary {
     pub net_contributions: f64,
     pub event_count: i64,
     pub backfill_complete: bool,
-    pub flows: Vec<CashFlow>,
 }

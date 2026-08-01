@@ -2,7 +2,6 @@ mod commands;
 mod config;
 mod db;
 mod models;
-mod performance;
 mod providers;
 
 use std::{fs, time::Duration};

@@ -13,7 +13,7 @@ The interface uses [General Sans](https://www.fontshare.com/fonts/general-sans) 
 - Native BTC, ETH, and SOL balances with EUR pricing
 - Local manual investment sources, including Opessocius balance and net deposits from `.env`
 - Combined and crypto hourly snapshots in local SQLite
-- Resumable Trading 212 cash-history backfill with net deposits, cash-flow-adjusted profit, and annualized MWRR
+- Resumable Trading 212 cash-history backfill with net deposits and simple total return
 - Responsive React interface designed to carry forward to Tauri iOS
 - Partial-failure handling when one provider is unavailable
 

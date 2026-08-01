@@ -149,9 +149,9 @@ function Overview({ dashboard, formatMoney }: { dashboard: Dashboard; formatMone
           helper={dashboard.historyEventCount ? `${dashboard.historyEventCount} cash events` : undefined}
         />
         <Metric
-          label="MWRR"
-          value={dashboard.moneyWeightedReturnPercent == null ? "Building" : `${dashboard.moneyWeightedReturnPercent.toFixed(2)}%`}
-          helper={dashboard.moneyWeightedReturnPercent == null ? "Completes after backfill" : "Annualised · Trading 212"}
+          label="Total return"
+          value={formatMoney(dashboard.totalReturn)}
+          helper={`${dashboard.returnPercent.toFixed(2)}% of invested capital`}
         />
         <Metric label="Cash" value={formatMoney(dashboard.cashValue)} />
       </section>

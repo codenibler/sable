@@ -11,7 +11,6 @@ use crate::{
     models::{
         AddWalletInput, CryptoPortfolio, Dashboard, HistorySyncState, Holding, SourceSummary,
     },
-    performance,
     providers::{crypto, trading212},
 };
 
@@ -234,11 +233,6 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     } else {
         invested_value
     };
-    let money_weighted_return_percent = if history_is_usable {
-        performance::money_weighted_return(&cash_history.flows, trading_value, Utc::now())
-    } else {
-        None
-    };
     for holding in &mut holdings {
         holding.allocation = if total_value > 0.0 {
             holding.value / total_value * 100.0
@@ -264,7 +258,6 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
             0.0
         },
         net_contributions: cash_history.net_contributions + opessocius_invested,
-        money_weighted_return_percent,
         history_event_count: cash_history.event_count,
         history_backfill_complete: cash_history.backfill_complete,
         currency: state.config.base_currency.clone(),
