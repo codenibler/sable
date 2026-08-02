@@ -9,6 +9,10 @@ use std::{fs, time::Duration};
 use commands::AppState;
 use tauri::{Emitter, Manager};
 
+pub fn validate_config() -> Result<(), String> {
+    config::Config::load().map(|_| ())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
