@@ -70,6 +70,7 @@ pub fn run() {
             commands::remove_wallet,
             commands::list_net_worth_entries,
             commands::save_net_worth_entry,
+            commands::remove_net_worth_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sable");

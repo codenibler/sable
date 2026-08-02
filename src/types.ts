@@ -143,3 +143,18 @@ export type AddWalletInput = {
   address: string;
   label: string;
 };
+
+export type NetWorthEntry = {
+  date: string;
+  netWorth: number;
+  stocks: number;
+  opessocius: number;
+  crypto: number;
+  savings: number;
+  spending: number;
+  receivables: number;
+  cash: number;
+  misc: number;
+};
+
+export type SaveNetWorthInput = Omit<NetWorthEntry, "netWorth">;

@@ -85,6 +85,10 @@ fn initialize(connection: &Connection) -> Result<(), String> {
                 misc_eur REAL NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS net_worth_seed_dates (
+                date TEXT PRIMARY KEY,
+                imported_at TEXT NOT NULL
              );",
         )
         .map_err(to_string)?;
@@ -122,6 +126,18 @@ pub fn import_net_worth_history(
     let mut inserted = 0;
     for entry in entries {
         let now = Utc::now().to_rfc3339();
+        let was_seeded = connection
+            .query_row(
+                "SELECT 1 FROM net_worth_seed_dates WHERE date = ?1",
+                [&entry.date],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(to_string)?
+            .is_some();
+        if was_seeded {
+            continue;
+        }
         inserted += connection
             .execute(
                 "INSERT OR IGNORE INTO net_worth_entries(
@@ -140,6 +156,12 @@ pub fn import_net_worth_history(
                     entry.misc,
                     now,
                 ],
+            )
+            .map_err(to_string)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO net_worth_seed_dates(date, imported_at) VALUES (?1, ?2)",
+                params![entry.date, now],
             )
             .map_err(to_string)?;
     }
@@ -225,6 +247,13 @@ pub fn list_net_worth_entries(connection: &Connection) -> Result<Vec<NetWorthEnt
         .map_err(to_string)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(to_string)
+}
+
+pub fn remove_net_worth_entry(connection: &Connection, date: &str) -> Result<(), String> {
+    connection
+        .execute("DELETE FROM net_worth_entries WHERE date = ?1", [date])
+        .map_err(to_string)?;
+    Ok(())
 }
 
 fn add_column_if_missing(connection: &Connection, statement: &str) -> Result<(), String> {
@@ -686,9 +715,9 @@ mod tests {
     use super::{
         add_wallet, cash_event_count, create_portfolio, ensure_portfolio, history_sync_state,
         import_net_worth_history, initialize, list_net_worth_entries, list_portfolios,
-        monthly_winning, monthly_winnings, save_cash_events, save_history_sync_state,
-        save_monthly_winnings, save_net_worth_entry, save_snapshot, simple_return_since,
-        snapshot_baseline,
+        monthly_winning, monthly_winnings, remove_net_worth_entry, save_cash_events,
+        save_history_sync_state, save_monthly_winnings, save_net_worth_entry, save_snapshot,
+        simple_return_since, snapshot_baseline,
     };
 
     #[test]
@@ -721,6 +750,10 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!((entries[0].net_worth - 20_464.31).abs() < 0.001);
         assert_eq!(entries[0].crypto, 100.0);
+        remove_net_worth_entry(&database, "2026-07-27").unwrap();
+        assert!(list_net_worth_entries(&database).unwrap().is_empty());
+        assert_eq!(import_net_worth_history(&database, &[entry]).unwrap(), 0);
+        assert!(list_net_worth_entries(&database).unwrap().is_empty());
     }
 
     #[test]

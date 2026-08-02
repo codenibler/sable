@@ -931,6 +931,14 @@ pub fn save_net_worth_entry(
     db::save_net_worth_entry(&database, &input)
 }
 
+#[tauri::command]
+pub fn remove_net_worth_entry(state: State<'_, AppState>, date: String) -> Result<(), String> {
+    NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+        .map_err(|_| "Net worth date must use YYYY-MM-DD format".to_string())?;
+    let database = state.database.lock().map_err(|_| "Database lock failed")?;
+    db::remove_net_worth_entry(&database, &date)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

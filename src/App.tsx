@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   BriefcaseBusiness,
   Building2,
+  ChartNoAxesCombined,
   CircleAlert,
   HardDrive,
   LayoutDashboard,
@@ -17,19 +18,23 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { PerformanceChart } from "./components/PerformanceChart";
-import type { AddWalletInput, CryptoPortfolio, Dashboard, MonitoredPortfolio, MonthlyWinnings, PeriodReturn } from "./types";
+import { NetWorthView } from "./components/NetWorthView";
+import type { AddWalletInput, CryptoPortfolio, Dashboard, MonitoredPortfolio, MonthlyWinnings, NetWorthEntry, PeriodReturn } from "./types";
 
-type View = "overview" | "wallets" | `portfolio:${string}`;
+type View = "net-worth" | "overview" | "wallets" | `portfolio:${string}`;
 
 function messageOf(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
 function App() {
-  const [view, setView] = useState<View>("overview");
+  const [view, setView] = useState<View>("net-worth");
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [netWorthEntries, setNetWorthEntries] = useState<NetWorthEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [netWorthLoading, setNetWorthLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [netWorthError, setNetWorthError] = useState<string | null>(null);
   const [walletModal, setWalletModal] = useState(false);
   const [winningsModal, setWinningsModal] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -46,9 +51,22 @@ function App() {
     }
   }, []);
 
+  const refreshNetWorth = useCallback(async () => {
+    setNetWorthLoading(true);
+    setNetWorthError(null);
+    try {
+      setNetWorthEntries(await api.netWorthEntries());
+    } catch (caught) {
+      setNetWorthError(messageOf(caught));
+    } finally {
+      setNetWorthLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    void refreshNetWorth();
+  }, [refresh, refreshNetWorth]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -70,8 +88,8 @@ function App() {
   const selectedCryptoPortfolio = selectedPortfolio?.kind === "crypto"
     ? dashboard?.portfolios.find((portfolio) => `portfolio-${portfolio.id}` === selectedPortfolio.id)
     : undefined;
-  const pageLabel = selectedPortfolio?.kind === "crypto" ? "Hardware wallet" : selectedPortfolio ? "Monitored portfolio" : view === "overview" ? "Net worth" : "On-chain portfolios";
-  const pageTitle = selectedPortfolio?.name ?? (view === "overview" ? "Overview" : "Crypto wallets");
+  const pageLabel = view === "net-worth" ? "Personal balance sheet" : selectedPortfolio?.kind === "crypto" ? "Hardware wallet" : selectedPortfolio ? "Monitored portfolio" : view === "overview" ? "Live monitor" : "On-chain portfolios";
+  const pageTitle = view === "net-worth" ? "Net Worth" : selectedPortfolio?.name ?? (view === "overview" ? "Overview" : "Crypto wallets");
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
@@ -80,6 +98,9 @@ function App() {
           {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
         </button>
         <nav>
+          <button className={view === "net-worth" ? "active" : ""} onClick={() => setView("net-worth")}>
+            <ChartNoAxesCombined size={18} /><span className="nav-copy">Net Worth</span>
+          </button>
           <button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}>
             <LayoutDashboard size={18} /><span className="nav-copy">Overview</span>
           </button>
@@ -103,21 +124,22 @@ function App() {
           <div>
             <p className="section-label">{pageLabel}</p>
             <h1>{pageTitle}</h1>
-            {dashboard && <p className="updated">Updated {new Date(dashboard.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>}
+            {view === "net-worth" ? netWorthEntries.length > 0 && <p className="updated">Latest snapshot {new Date(`${netWorthEntries.at(-1)!.date}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</p> : dashboard && <p className="updated">Updated {new Date(dashboard.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>}
           </div>
           <div className="topbar-actions">
-            <button className="icon-button" onClick={() => void refresh()} disabled={loading} aria-label="Refresh portfolio">
-              <RefreshCw size={18} className={loading ? "spin" : ""} />
+            <button className="icon-button" onClick={() => void (view === "net-worth" ? refreshNetWorth() : refresh())} disabled={view === "net-worth" ? netWorthLoading : loading} aria-label="Refresh portfolio">
+              <RefreshCw size={18} className={(view === "net-worth" ? netWorthLoading : loading) ? "spin" : ""} />
             </button>
             {(view === "wallets" || selectedCryptoPortfolio) && <button className="primary-button" onClick={() => setWalletModal(true)} disabled={!dashboard?.portfolios.length}><Plus size={17} /> Add wallet</button>}
           </div>
         </header>
 
-        {error && (
+        {view !== "net-worth" && error && (
           <div className="error-banner"><CircleAlert size={18} /><div><strong>Sable could not start</strong><p>{error}</p></div></div>
         )}
+        {view === "net-worth" && netWorthError && <div className="error-banner"><CircleAlert size={18} /><div><strong>Could not load net worth</strong><p>{netWorthError}</p></div></div>}
 
-        {!dashboard && loading ? <Loading /> : dashboard && view === "overview" ? (
+        {view === "net-worth" ? netWorthLoading && !netWorthEntries.length ? <Loading /> : <NetWorthView entries={netWorthEntries} formatMoney={formatMoney} onChanged={refreshNetWorth} /> : !dashboard && loading ? <Loading /> : dashboard && view === "overview" ? (
           <Overview dashboard={dashboard} formatMoney={formatMoney} onAddWinnings={() => setWinningsModal(true)} />
         ) : dashboard && selectedPortfolio && selectedCryptoPortfolio ? (
           <CryptoPortfolioDetailView portfolio={selectedCryptoPortfolio} monitored={selectedPortfolio} formatMoney={formatMoney} />
