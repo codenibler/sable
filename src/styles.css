@@ -206,8 +206,6 @@ tbody tr:last-child td { border-bottom: 0; }
 .chart-focus small { margin-top: 3px; color: #626764; font-size: var(--font-caption); }
 .net-worth-chart-scroll { overflow-x: auto; padding: 15px 22px 0; scrollbar-color: #2a2c2a transparent; }
 .net-worth-bars { position: relative; min-width: 720px; height: 298px; display: grid; gap: 8px; align-items: stretch; }
-.net-worth-moving-average { position: absolute; inset: 24px 0 34px; z-index: 3; width: 100%; height: calc(100% - 58px); overflow: visible; pointer-events: none; }
-.net-worth-moving-average polyline { fill: none; stroke: var(--gold); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 3px rgb(179 154 99 / .16)); }
 .net-worth-bar-column { position: relative; z-index: 1; min-width: 0; height: 100%; display: grid; grid-template-rows: 24px minmax(0, 1fr) 34px; align-items: end; padding: 0 2px; border: 0; border-radius: 6px; color: #626764; background: transparent; cursor: pointer; }
 .net-worth-bar-column:hover, .net-worth-bar-column.selected { background: rgb(255 255 255 / .015); }
 .bar-change { align-self: center; overflow: hidden; font-size: .62rem; font-variant-numeric: tabular-nums; text-align: center; text-overflow: ellipsis; }
@@ -217,8 +215,6 @@ tbody tr:last-child td { border-bottom: 0; }
 .net-worth-bar-column > small { align-self: start; justify-self: center; padding-top: 8px; color: #5e6460; font-size: .64rem; white-space: nowrap; }
 .net-worth-bar-column.selected > small { color: #a4a9a5; }
 .net-worth-chart-legend { display: flex; justify-content: space-between; gap: 20px; padding: 11px 22px 14px; border-top: 1px solid var(--line-soft); color: #555a57; font-size: var(--font-caption); }
-.moving-average-legend { display: inline-flex; align-items: center; gap: 7px; color: #8f876f; }
-.moving-average-legend i { width: 18px; height: 1px; background: var(--gold); box-shadow: 0 0 3px rgb(179 154 99 / .16); }
 .net-worth-lower-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); gap: 16px; }
 .net-worth-allocation-list { display: grid; padding: 7px 22px 15px; }
 .net-worth-allocation { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(90px, 1.2fr) 47px; align-items: center; gap: 13px; min-height: 48px; border-bottom: 1px solid var(--line-soft); }
