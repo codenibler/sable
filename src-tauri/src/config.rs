@@ -1,5 +1,7 @@
 use std::env;
 
+use chrono::{Datelike, NaiveDate};
+
 #[derive(Clone)]
 pub struct Config {
     pub trading212_api_key: Option<String>,
@@ -25,6 +27,7 @@ pub struct Config {
     pub opessocius_current_balance: f64,
     pub opessocius_net_deposits: f64,
     pub opessocius_monthly_return_rate: f64,
+    pub opessocius_return_start_month: String,
     pub configured_bitcoin_xpubs: Vec<String>,
     pub configured_ethereum_addresses: Vec<String>,
     pub configured_solana_addresses: Vec<String>,
@@ -71,6 +74,7 @@ impl Config {
             opessocius_current_balance: non_negative_amount("OPESSOCIUS_CURRENT_BALANCE")?,
             opessocius_net_deposits: non_negative_amount("OPESSOCIUS_NET_DEPOSITS")?,
             opessocius_monthly_return_rate: unit_rate("OPESSOCIUS_MONTHLY_RETURN_RATE")?,
+            opessocius_return_start_month: month_start("OPESSOCIUS_RETURN_START_MONTH")?,
             configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
             configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
@@ -133,6 +137,16 @@ fn unit_rate(key: &str) -> Result<f64, String> {
     } else {
         Err(format!("{key} must be between 0 and 1"))
     }
+}
+
+fn month_start(key: &str) -> Result<String, String> {
+    let value = required(key)?;
+    let date = NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+        .map_err(|_| format!("{key} must use YYYY-MM-DD format"))?;
+    if date.day() != 1 {
+        return Err(format!("{key} must be the first day of a month"));
+    }
+    Ok(date.format("%Y-%m-%d").to_string())
 }
 
 fn configured_list(key: &str) -> Vec<String> {

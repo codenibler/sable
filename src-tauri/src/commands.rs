@@ -50,9 +50,13 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
             &database,
             state.config.opessocius_current_balance,
             state.config.opessocius_monthly_return_rate,
+            &state.config.opessocius_return_start_month,
             &return_month_start,
         )?;
-        let winnings = db::monthly_winnings(&database, OPESSOCIUS_SOURCE)?;
+        let winnings = db::monthly_winnings(&database, OPESSOCIUS_SOURCE)?
+            .into_iter()
+            .filter(|(month, _)| month >= &state.config.opessocius_return_start_month)
+            .collect::<Vec<_>>();
         let (amount, is_override) =
             db::monthly_winning(&database, OPESSOCIUS_SOURCE, &return_month_start)?
                 .ok_or("Could not determine the latest Opessocius return")?;
@@ -468,18 +472,23 @@ fn planned_default_monthly_returns(
     existing: &[(String, f64)],
     opening_balance: f64,
     monthly_rate: f64,
+    start_month: &str,
     through_month: &str,
 ) -> Result<Vec<(String, f64)>, String> {
+    let start = NaiveDate::parse_from_str(start_month, "%Y-%m-%d")
+        .map_err(|_| "Could not determine the Opessocius return start month")?;
     let through = NaiveDate::parse_from_str(through_month, "%Y-%m-%d")
         .map_err(|_| "Could not determine the latest Opessocius return month")?;
     let mut recorded = BTreeMap::new();
     for (month, amount) in existing {
         let date = NaiveDate::parse_from_str(month, "%Y-%m-%d")
             .map_err(|_| "Stored monthly winnings contain an invalid month")?;
-        recorded.insert(date, *amount);
+        if date >= start {
+            recorded.insert(date, *amount);
+        }
     }
 
-    let mut month = recorded.keys().next().copied().unwrap_or(through);
+    let mut month = start;
     let mut balance = opening_balance;
     let mut planned = Vec::new();
     while month <= through {
@@ -499,12 +508,17 @@ fn ensure_default_monthly_returns(
     connection: &rusqlite::Connection,
     opening_balance: f64,
     monthly_rate: f64,
+    start_month: &str,
     through_month: &str,
 ) -> Result<(), String> {
     let existing = db::monthly_winnings(connection, OPESSOCIUS_SOURCE)?;
-    for (month, amount) in
-        planned_default_monthly_returns(&existing, opening_balance, monthly_rate, through_month)?
-    {
+    for (month, amount) in planned_default_monthly_returns(
+        &existing,
+        opening_balance,
+        monthly_rate,
+        start_month,
+        through_month,
+    )? {
         db::save_monthly_winnings(connection, OPESSOCIUS_SOURCE, &month, amount, false)?;
     }
     Ok(())
@@ -657,13 +671,34 @@ mod tests {
     fn compounds_missing_months_at_the_configured_default_rate() {
         let existing = vec![("2026-07-01".to_string(), 20.0)];
         let planned =
-            planned_default_monthly_returns(&existing, 1_000.0, 0.02, "2026-09-01").unwrap();
+            planned_default_monthly_returns(&existing, 1_000.0, 0.02, "2026-07-01", "2026-09-01")
+                .unwrap();
         assert_eq!(
             planned,
             vec![
                 ("2026-08-01".to_string(), 20.4),
                 ("2026-09-01".to_string(), 20.81),
             ]
+        );
+    }
+
+    #[test]
+    fn starts_automatic_returns_in_july_2026() {
+        let planned =
+            planned_default_monthly_returns(&[], 1_000.0, 0.02, "2026-07-01", "2026-08-01")
+                .unwrap();
+        assert_eq!(
+            planned,
+            vec![
+                ("2026-07-01".to_string(), 20.0),
+                ("2026-08-01".to_string(), 20.4),
+            ]
+        );
+
+        assert!(
+            planned_default_monthly_returns(&[], 1_000.0, 0.02, "2026-07-01", "2026-06-01",)
+                .unwrap()
+                .is_empty()
         );
     }
 
