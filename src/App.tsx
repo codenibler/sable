@@ -1,5 +1,6 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -9,10 +10,12 @@ import {
   CircleAlert,
   HardDrive,
   LayoutDashboard,
+  Minus,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
   RefreshCw,
+  Square,
   WalletCards,
   X,
 } from "lucide-react";
@@ -38,8 +41,11 @@ function App() {
   const [walletModal, setWalletModal] = useState(false);
   const [winningsModal, setWinningsModal] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const refreshing = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (refreshing.current) return;
+    refreshing.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -48,6 +54,7 @@ function App() {
       setError(messageOf(caught));
     } finally {
       setLoading(false);
+      refreshing.current = false;
     }
   }, []);
 
@@ -75,6 +82,15 @@ function App() {
     });
     return () => unlisten?.();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!dashboard?.refreshIntervalMinutes) return;
+    const interval = window.setInterval(
+      () => void refresh(),
+      Math.max(dashboard.refreshIntervalMinutes, 1) * 60_000,
+    );
+    return () => window.clearInterval(interval);
+  }, [dashboard?.refreshIntervalMinutes, refresh]);
 
   const currency = dashboard?.currency ?? "EUR";
   const money = useMemo(
@@ -120,17 +136,18 @@ function App() {
       </aside>
 
       <main className="content">
-        <header className="topbar">
-          <div>
-            <p className="section-label">{pageLabel}</p>
-            <h1>{pageTitle}</h1>
-            {view === "net-worth" ? netWorthEntries.length > 0 && <p className="updated">Latest snapshot {new Date(`${netWorthEntries.at(-1)!.date}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</p> : dashboard && <p className="updated">Updated {new Date(dashboard.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>}
+        <header className="topbar" data-tauri-drag-region>
+          <div className="topbar-title" data-tauri-drag-region>
+            <p className="section-label" data-tauri-drag-region>{pageLabel}</p>
+            <h1 data-tauri-drag-region>{pageTitle}</h1>
+            {view === "net-worth" ? netWorthEntries.length > 0 && <p className="updated" data-tauri-drag-region>Latest snapshot {new Date(`${netWorthEntries.at(-1)!.date}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</p> : dashboard && <p className="updated" data-tauri-drag-region>Updated {new Date(dashboard.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>}
           </div>
           <div className="topbar-actions">
-            <button className="icon-button" onClick={() => void (view === "net-worth" ? refreshNetWorth() : refresh())} disabled={view === "net-worth" ? netWorthLoading : loading} aria-label="Refresh portfolio">
+            <button className="icon-button" onClick={() => void (view === "net-worth" ? refreshNetWorth() : refresh())} disabled={view === "net-worth" ? netWorthLoading : loading} aria-label="Refresh portfolio" title="Refresh now">
               <RefreshCw size={18} className={(view === "net-worth" ? netWorthLoading : loading) ? "spin" : ""} />
             </button>
             {(view === "wallets" || selectedCryptoPortfolio) && <button className="primary-button" onClick={() => setWalletModal(true)} disabled={!dashboard?.portfolios.length}><Plus size={17} /> Add wallet</button>}
+            <WindowControls />
           </div>
         </header>
 
@@ -161,6 +178,17 @@ function App() {
       {winningsModal && dashboard?.opessociusMonthlyReturn && (
         <WinningsModal winnings={dashboard.opessociusMonthlyReturn} currency={dashboard.currency} onClose={() => setWinningsModal(false)} onSaved={async () => { setWinningsModal(false); await refresh(); }} />
       )}
+    </div>
+  );
+}
+
+function WindowControls() {
+  const perform = (action: () => Promise<void>) => void action().catch(() => undefined);
+  return (
+    <div className="window-controls" aria-label="Window controls">
+      <button className="window-control" onClick={() => perform(() => getCurrentWindow().minimize())} aria-label="Minimize window" title="Minimize"><Minus size={14} /></button>
+      <button className="window-control" onClick={() => perform(() => getCurrentWindow().toggleMaximize())} aria-label="Maximize window" title="Maximize"><Square size={11} /></button>
+      <button className="window-control window-close" onClick={() => perform(() => getCurrentWindow().close())} aria-label="Close window" title="Close"><X size={14} /></button>
     </div>
   );
 }

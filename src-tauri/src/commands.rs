@@ -474,6 +474,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         net_contributions: cash_history.net_contributions + opessocius_invested,
         history_event_count: cash_history.event_count,
         history_backfill_complete: cash_history.backfill_complete,
+        refresh_interval_minutes: state.config.snapshot_interval_minutes.max(1),
         currency: state.config.base_currency.clone(),
         updated_at: Utc::now().to_rfc3339(),
         history,

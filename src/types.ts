@@ -88,6 +88,7 @@ export type Dashboard = {
   netContributions: number;
   historyEventCount: number;
   historyBackfillComplete: boolean;
+  refreshIntervalMinutes: number;
   currency: string;
   updatedAt: string;
   history: DataPoint[];

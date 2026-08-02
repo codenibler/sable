@@ -126,11 +126,11 @@ impl Config {
 }
 
 fn load_dotenv() -> Option<PathBuf> {
-    if let Some(path) = env::var_os("SABLE_ENV_FILE").map(PathBuf::from) {
-        if dotenvy::from_path(&path).is_ok() {
-            let _ = harden_private_file(&path);
-            return Some(path);
-        }
+    if let Some(path) = env::var_os("SABLE_ENV_FILE").map(PathBuf::from)
+        && dotenvy::from_path(&path).is_ok()
+    {
+        let _ = harden_private_file(&path);
+        return Some(path);
     }
     if let Ok(path) = dotenvy::dotenv() {
         let _ = harden_private_file(&path);
@@ -144,11 +144,10 @@ fn load_dotenv() -> Option<PathBuf> {
         .skip(1)
         .map(|directory| directory.join(".env"))
         .find(|candidate| candidate.is_file())
+        && dotenvy::from_path(&path).is_ok()
     {
-        if dotenvy::from_path(&path).is_ok() {
-            let _ = harden_private_file(&path);
-            return Some(path);
-        }
+        let _ = harden_private_file(&path);
+        return Some(path);
     }
     None
 }

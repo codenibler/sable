@@ -14,6 +14,7 @@ pub struct Dashboard {
     pub net_contributions: f64,
     pub history_event_count: i64,
     pub history_backfill_complete: bool,
+    pub refresh_interval_minutes: i64,
     pub currency: String,
     pub updated_at: String,
     pub history: Vec<DataPoint>,
