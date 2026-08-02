@@ -114,7 +114,24 @@ pub struct CryptoPortfolio {
     pub name: String,
     pub value: f64,
     pub return_value: f64,
+    pub assets: Vec<CryptoAsset>,
     pub wallets: Vec<Wallet>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CryptoAsset {
+    pub network: String,
+    pub symbol: String,
+    pub name: String,
+    pub balance: f64,
+    pub value: f64,
+    pub invested_value: f64,
+    pub total_return: f64,
+    pub return_percent: f64,
+    pub allocation: f64,
+    pub wallet_count: usize,
+    pub history: Vec<DataPoint>,
 }
 
 #[derive(Debug, Clone, Serialize)]

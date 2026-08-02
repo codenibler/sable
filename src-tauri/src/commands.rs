@@ -12,8 +12,8 @@ use crate::{
     config::Config,
     db,
     models::{
-        AddWalletInput, CryptoPortfolio, Dashboard, HistorySyncState, Holding, MonitoredPortfolio,
-        MonthlyWinnings, PeriodReturn, PortfolioPeriod, SourceSummary,
+        AddWalletInput, CryptoAsset, CryptoPortfolio, Dashboard, HistorySyncState, Holding,
+        MonitoredPortfolio, MonthlyWinnings, PeriodReturn, PortfolioPeriod, SourceSummary,
     },
     providers::{crypto, trading212},
 };
@@ -226,7 +226,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
         for portfolio in &mut portfolios {
             portfolio.value = portfolio.wallets.iter().map(|wallet| wallet.value).sum();
-            let baseline = db::first_snapshot_value(&database, "portfolio", portfolio.id)?
+            let baseline = db::snapshot_baseline(&database, "portfolio", portfolio.id)?
                 .unwrap_or(portfolio.value);
             portfolio.return_value = portfolio.value - baseline;
             db::save_snapshot(
@@ -238,6 +238,8 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                 0.0,
                 state.config.snapshot_interval_minutes,
             )?;
+            portfolio.assets =
+                crypto_assets(&database, portfolio, state.config.snapshot_interval_minutes)?;
             crypto_value += portfolio.value;
             crypto_invested += baseline;
             crypto_return += portfolio.return_value;
@@ -490,6 +492,61 @@ fn percent_of(amount: f64, basis: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+fn crypto_assets(
+    connection: &rusqlite::Connection,
+    portfolio: &CryptoPortfolio,
+    snapshot_interval_minutes: i64,
+) -> Result<Vec<CryptoAsset>, String> {
+    let mut assets = Vec::new();
+    for (network, symbol, name) in [
+        ("btc", "BTC", "Bitcoin"),
+        ("eth", "ETH", "Ethereum"),
+        ("sol", "SOL", "Solana"),
+    ] {
+        let wallets = portfolio
+            .wallets
+            .iter()
+            .filter(|wallet| wallet.network == network)
+            .collect::<Vec<_>>();
+        if wallets.is_empty() {
+            continue;
+        }
+        let balance = wallets.iter().map(|wallet| wallet.balance).sum::<f64>();
+        let value = wallets.iter().map(|wallet| wallet.value).sum::<f64>();
+        let source_kind = format!("crypto-{network}");
+        let invested_value =
+            db::snapshot_baseline(connection, &source_kind, portfolio.id)?.unwrap_or(value);
+        db::save_snapshot(
+            connection,
+            &source_kind,
+            portfolio.id,
+            value,
+            invested_value,
+            0.0,
+            snapshot_interval_minutes,
+        )?;
+        let total_return = value - invested_value;
+        assets.push(CryptoAsset {
+            network: network.to_string(),
+            symbol: symbol.to_string(),
+            name: name.to_string(),
+            balance,
+            value,
+            invested_value,
+            total_return,
+            return_percent: percent_of(total_return, invested_value),
+            allocation: if portfolio.value > 0.0 {
+                value / portfolio.value * 100.0
+            } else {
+                0.0
+            },
+            wallet_count: wallets.len(),
+            history: db::source_history(connection, &source_kind, portfolio.id)?,
+        });
+    }
+    Ok(assets)
 }
 
 fn opessocius_portfolio_history(

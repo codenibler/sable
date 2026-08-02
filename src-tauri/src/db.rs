@@ -225,6 +225,7 @@ pub fn list_portfolios(connection: &Connection) -> Result<Vec<CryptoPortfolio>, 
             name,
             value: 0.0,
             return_value: 0.0,
+            assets: Vec::new(),
             wallets: list_wallets(connection, id)?,
         });
     }
@@ -529,14 +530,14 @@ pub fn monthly_winnings(
         .map_err(to_string)
 }
 
-pub fn first_snapshot_value(
+pub fn snapshot_baseline(
     connection: &Connection,
     source_kind: &str,
     source_id: i64,
 ) -> Result<Option<f64>, String> {
     connection
         .query_row(
-            "SELECT value_eur FROM snapshots WHERE source_kind = ?1 AND source_id = ?2
+            "SELECT invested_eur FROM snapshots WHERE source_kind = ?1 AND source_id = ?2
              ORDER BY captured_at LIMIT 1",
             params![source_kind, source_id],
             |row| row.get(0),
@@ -559,6 +560,7 @@ mod tests {
         add_wallet, cash_event_count, create_portfolio, ensure_portfolio, history_sync_state,
         initialize, list_portfolios, monthly_winning, monthly_winnings, save_cash_events,
         save_history_sync_state, save_monthly_winnings, save_snapshot, simple_return_since,
+        snapshot_baseline,
     };
 
     #[test]
@@ -652,6 +654,7 @@ mod tests {
             .expect("snapshot query");
         assert_eq!(count, 1);
         assert_eq!(value, 12.0);
+        assert_eq!(snapshot_baseline(&database, "total", 0).unwrap(), Some(8.0));
     }
 
     #[test]
