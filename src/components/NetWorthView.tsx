@@ -27,6 +27,11 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
 
   const analytics = useMemo(() => calculateAnalytics(entries), [entries]);
   const selected = entries.find((entry) => entry.date === selectedDate) ?? entries.at(-1);
+  const movingAveragePoints = entries.flatMap((_, index) => {
+    if (index < 2) return [];
+    const average = entries.slice(index - 2, index + 1).reduce((sum, entry) => sum + entry.netWorth, 0) / 3;
+    return [{ x: ((index + 0.5) / entries.length) * 1000, y: 100 - (average / analytics.high.netWorth) * 100 }];
+  });
 
   const remove = async (entry: NetWorthEntry) => {
     if (!window.confirm(`Remove the net worth snapshot from ${formatDate(entry.date)}?`)) return;
@@ -64,6 +69,7 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
       <div className="panel-heading"><div><p className="section-label">Progression</p><h2>Net worth by date</h2></div><div className="chart-focus"><strong>{formatMoney(selected?.netWorth ?? 0)}</strong><small>{selected ? formatDate(selected.date) : ""}</small></div></div>
       <div className="net-worth-chart-scroll">
         <div className="net-worth-bars" style={{ gridTemplateColumns: `repeat(${entries.length}, minmax(42px, 1fr))` }}>
+          {movingAveragePoints.length > 1 && <svg className="net-worth-moving-average" viewBox="0 0 1000 100" preserveAspectRatio="none" role="img" aria-label="Three-entry moving average of net worth"><polyline points={movingAveragePoints.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ")} /></svg>}
           {entries.map((entry, index) => {
             const previous = entries[index - 1];
             const change = previous ? entry.netWorth - previous.netWorth : 0;
@@ -77,7 +83,7 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
           })}
         </div>
       </div>
-      <div className="net-worth-chart-legend"><span>Bars start at zero</span><span>{entries.length} snapshots · {Math.round(analytics.elapsedDays)} days</span></div>
+      <div className="net-worth-chart-legend"><span>Bars start at zero</span><span className="moving-average-legend"><i />3-entry moving average</span><span>{entries.length} snapshots · {Math.round(analytics.elapsedDays)} days</span></div>
     </section>
 
     <section className="net-worth-lower-grid">
