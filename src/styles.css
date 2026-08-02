@@ -222,6 +222,7 @@ tbody tr:last-child td { border-bottom: 0; }
 .network-mark { width: 36px; height: 36px; font-size: var(--font-small); }
 .network-mark.btc { color: #ffb45e; background: #2c2114; }
 .network-mark.eth { color: #aab7ff; background: #1c2035; }
+.network-mark.link { color: #cab98f; background: #242018; }
 .network-mark.sol { color: var(--gold); background: var(--gold-dim); }
 .wallet-identity, .wallet-balance { display: grid; min-width: 0; }
 .wallet-identity strong, .wallet-balance strong { font-size: var(--font-small); }

@@ -234,10 +234,10 @@ function PortfolioDetailView({ portfolio, formatMoney, onEditReturn }: { portfol
 }
 
 function CryptoPortfolioDetailView({ portfolio, monitored, formatMoney }: { portfolio: CryptoPortfolio; monitored: MonitoredPortfolio; formatMoney: (value: number) => string }) {
-  const [selectedNetwork, setSelectedNetwork] = useState<"all" | "btc" | "eth" | "sol">("all");
-  const selectedAsset = selectedNetwork === "all" ? undefined : portfolio.assets.find((asset) => asset.network === selectedNetwork);
+  const [selectedAssetId, setSelectedAssetId] = useState("all");
+  const selectedAsset = selectedAssetId === "all" ? undefined : portfolio.assets.find((asset) => asset.id === selectedAssetId);
   const visibleWallets = selectedAsset
-    ? portfolio.wallets.filter((wallet) => wallet.network === selectedAsset.network)
+    ? portfolio.wallets.filter((wallet) => wallet.assets.some((asset) => asset.id === selectedAsset.id))
     : portfolio.wallets;
   const value = selectedAsset?.value ?? monitored.value;
   const baseline = selectedAsset?.investedValue ?? monitored.investedValue;
@@ -268,11 +268,11 @@ function CryptoPortfolioDetailView({ portfolio, monitored, formatMoney }: { port
     <section className="panel asset-breakdown-panel">
       <div className="panel-heading"><div><p className="section-label">Holdings</p><h2>Cryptocurrencies</h2></div><span className="muted">Select to investigate</span></div>
       <div className="asset-selector" role="list" aria-label="Cryptocurrency performance">
-        <button className={selectedNetwork === "all" ? "asset-select active" : "asset-select"} onClick={() => setSelectedNetwork("all")}>
+        <button className={selectedAssetId === "all" ? "asset-select active" : "asset-select"} onClick={() => setSelectedAssetId("all")}>
           <span className="network-mark all">Σ</span><span><small>Combined</small><strong>{formatMoney(portfolio.value)}</strong></span><span className={monitored.totalReturn >= 0 ? "positive-text" : "negative-text"}>{monitored.returnPercent.toFixed(2)}%</span>
         </button>
-        {portfolio.assets.map((asset) => <button className={selectedNetwork === asset.network ? "asset-select active" : "asset-select"} key={asset.network} onClick={() => setSelectedNetwork(asset.network)}>
-          <span className={`network-mark ${asset.network}`}>{asset.symbol.slice(0, 1)}</span><span><small>{asset.name} · {asset.allocation.toFixed(1)}%</small><strong>{formatMoney(asset.value)}</strong></span><span className={asset.totalReturn >= 0 ? "positive-text" : "negative-text"}>{asset.returnPercent.toFixed(2)}%</span>
+        {portfolio.assets.map((asset) => <button className={selectedAssetId === asset.id ? "asset-select active" : "asset-select"} key={asset.id} onClick={() => setSelectedAssetId(asset.id)}>
+          <span className={`network-mark ${asset.id}`}>{asset.symbol.slice(0, 1)}</span><span><small>{asset.name} · {asset.allocation.toFixed(1)}%</small><strong>{formatMoney(asset.value)}</strong></span><span className={asset.totalReturn >= 0 ? "positive-text" : "negative-text"}>{asset.returnPercent.toFixed(2)}%</span>
         </button>)}
       </div>
     </section>
@@ -288,9 +288,10 @@ function CryptoPortfolioDetailView({ portfolio, monitored, formatMoney }: { port
 
     <section className="panel portfolio-panel crypto-wallet-panel">
       <div className="portfolio-header"><div><p className="section-label">Inside {portfolio.name}</p><h2>{selectedAsset ? `${selectedAsset.symbol} wallets` : "Wallets"}</h2></div><div className="portfolio-total"><strong>{visibleWallets.length}</strong><span className="muted">shown</span></div></div>
-      {visibleWallets.length ? <div className="wallet-list">{visibleWallets.map((wallet) => (
-        <div className="wallet-row wallet-row-readonly" key={wallet.id}><span className={`network-mark ${wallet.network}`}>{wallet.symbol.slice(0, 1)}</span><div className="wallet-identity"><strong>{wallet.label}</strong><small>{wallet.walletType === "xpub" ? `Bitcoin XPUB · ${wallet.addressCount} active derived address${wallet.addressCount === 1 ? "" : "es"}` : `${wallet.displayAddress.slice(0, 10)}…${wallet.displayAddress.slice(-8)}`}</small></div><div className="wallet-balance"><strong>{wallet.balance.toLocaleString(undefined, { maximumFractionDigits: 8 })} {wallet.symbol}</strong><small>{wallet.message ?? formatMoney(wallet.value)}</small></div></div>
-      ))}</div> : <Empty icon={<WalletCards size={22} />} title="No matching wallets" text="Add a public address or XPUB to begin tracking this cryptocurrency." />}
+      {visibleWallets.length ? <div className="wallet-list">{visibleWallets.map((wallet) => {
+        const holding = selectedAsset ? wallet.assets.find((asset) => asset.id === selectedAsset.id) : undefined;
+        return <div className="wallet-row wallet-row-readonly" key={wallet.id}><span className={`network-mark ${holding?.id ?? wallet.network}`}>{(holding?.symbol ?? wallet.symbol).slice(0, 1)}</span><div className="wallet-identity"><strong>{wallet.label}</strong><small>{wallet.walletType === "xpub" ? `Bitcoin XPUB · ${wallet.addressCount} active derived address${wallet.addressCount === 1 ? "" : "es"}` : `${wallet.displayAddress.slice(0, 10)}…${wallet.displayAddress.slice(-8)}`}</small></div><div className="wallet-balance"><strong>{holding ? `${holding.balance.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${holding.symbol}` : formatMoney(wallet.value)}</strong><small>{wallet.message ?? (holding ? formatMoney(holding.value) : wallet.assets.map((asset) => asset.symbol).join(" · "))}</small></div></div>;
+      })}</div> : <Empty icon={<WalletCards size={22} />} title="No matching wallets" text="Add a public address or XPUB to begin tracking this cryptocurrency." />}
     </section>
     <p className="tracking-disclaimer">Tracked return measures value change since Sable’s first local snapshot. It is not tax-lot cost basis and does not infer deposits or withdrawals.</p>
   </div>;
@@ -333,7 +334,7 @@ function Wallets({ portfolios, formatMoney, onAddWallet, onChanged }: { portfoli
       <section className="panel portfolio-panel" key={portfolio.id}>
         <div className="portfolio-header"><div><p className="section-label">On-chain assets</p><h2>Wallets</h2></div><div className="portfolio-total"><strong>{formatMoney(portfolio.value)}</strong></div></div>
         {portfolio.wallets.length ? <div className="wallet-list">{portfolio.wallets.map((wallet) => (
-          <div className="wallet-row" key={wallet.id}><span className={`network-mark ${wallet.network}`}>{wallet.symbol.slice(0, 1)}</span><div className="wallet-identity"><strong>{wallet.label}</strong><small>{wallet.walletType === "xpub" ? `${wallet.addressCount} active derived address${wallet.addressCount === 1 ? "" : "es"}` : `${wallet.displayAddress.slice(0, 8)}…${wallet.displayAddress.slice(-6)}`}</small></div><div className="wallet-balance"><strong>{wallet.balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} {wallet.symbol}</strong><small>{wallet.message ?? formatMoney(wallet.value)}</small></div><button className="row-action" onClick={() => void removeWallet(wallet.id)} aria-label={`Remove ${wallet.label}`}><X size={16} /></button></div>
+          <div className="wallet-row" key={wallet.id}><span className={`network-mark ${wallet.network}`}>{wallet.symbol.slice(0, 1)}</span><div className="wallet-identity"><strong>{wallet.label}</strong><small>{wallet.walletType === "xpub" ? `${wallet.addressCount} active derived address${wallet.addressCount === 1 ? "" : "es"}` : `${wallet.displayAddress.slice(0, 8)}…${wallet.displayAddress.slice(-6)}`}</small></div><div className="wallet-balance"><strong>{formatMoney(wallet.value)}</strong><small>{wallet.message ?? wallet.assets.map((asset) => `${asset.balance.toLocaleString(undefined, { maximumFractionDigits: 6 })} ${asset.symbol}`).join(" · ")}</small></div><button className="row-action" onClick={() => void removeWallet(wallet.id)} aria-label={`Remove ${wallet.label}`}><X size={16} /></button></div>
         ))}</div> : <Empty icon={<WalletCards size={22} />} title="No wallets yet" text="Add BTC addresses or XPUBs, ETH addresses, and SOL addresses to see their cumulative balance." action={<button className="primary-button" onClick={onAddWallet}><Plus size={16} /> Add first wallet</button>} />}
       </section>
     ) : null}

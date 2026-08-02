@@ -37,6 +37,18 @@ export type Wallet = {
   balance: number;
   symbol: string;
   value: number;
+  assets: WalletAsset[];
+  message: string | null;
+};
+
+export type WalletAsset = {
+  id: string;
+  network: Wallet["network"];
+  symbol: string;
+  name: string;
+  balance: number;
+  price: number;
+  value: number;
   message: string | null;
 };
 
@@ -50,6 +62,7 @@ export type CryptoPortfolio = {
 };
 
 export type CryptoAsset = {
+  id: string;
   network: Wallet["network"];
   symbol: string;
   name: string;
