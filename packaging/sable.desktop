@@ -2,7 +2,7 @@
 Type=Application
 Name=Sable
 Comment=A private, local-first portfolio monitor
-Exec=/home/codenibler/Applications/Sable.AppImage
+Exec=/usr/bin/env SABLE_ENV_FILE=/home/codenibler/Projects/portfolio_monitor/.env /home/codenibler/Applications/Sable.AppImage
 TryExec=/home/codenibler/Applications/Sable.AppImage
 Path=/home/codenibler/Projects/portfolio_monitor
 Icon=/home/codenibler/.local/share/icons/hicolor/512x512/apps/sable.png

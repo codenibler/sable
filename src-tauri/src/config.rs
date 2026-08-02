@@ -103,6 +103,11 @@ impl Config {
 }
 
 fn load_dotenv() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("SABLE_ENV_FILE").map(PathBuf::from) {
+        if dotenvy::from_path(&path).is_ok() {
+            return Some(path);
+        }
+    }
     if let Ok(path) = dotenvy::dotenv() {
         return Some(path);
     }
