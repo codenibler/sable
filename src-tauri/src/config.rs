@@ -15,6 +15,15 @@ pub struct OpessociusHistoryRow {
     pub ending_balance_eur: f64,
 }
 
+#[derive(Clone, Debug)]
+pub struct EthereumTokenConfig {
+    pub price_id: String,
+    pub symbol: String,
+    pub name: String,
+    pub contract_address: String,
+    pub decimals: u32,
+}
+
 #[derive(Clone)]
 pub struct Config {
     pub trading212_api_key: Option<String>,
@@ -23,6 +32,7 @@ pub struct Config {
     pub coingecko_base_url: String,
     pub blockstream_base_url: String,
     pub ethereum_rpc_url: String,
+    pub ethereum_tokens: Vec<EthereumTokenConfig>,
     pub solana_rpc_url: String,
     pub frankfurter_base_url: String,
     pub base_currency: String,
@@ -59,6 +69,7 @@ impl Config {
             coingecko_base_url: required("COINGECKO_BASE_URL")?,
             blockstream_base_url: required("BLOCKSTREAM_BASE_URL")?,
             ethereum_rpc_url: required("ETHEREUM_RPC_URL")?,
+            ethereum_tokens: ethereum_tokens("ETHEREUM_ERC20_TOKENS")?,
             solana_rpc_url: required("SOLANA_RPC_URL")?,
             frankfurter_base_url: required("FRANKFURTER_BASE_URL")?,
             base_currency: required("APP_BASE_CURRENCY")?.to_uppercase(),
@@ -261,11 +272,73 @@ fn configured_list(key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn ethereum_tokens(key: &str) -> Result<Vec<EthereumTokenConfig>, String> {
+    let Some(value) = optional(key) else {
+        return Ok(Vec::new());
+    };
+    value
+        .split(';')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .enumerate()
+        .map(|(index, entry)| {
+            let fields = entry.split('|').map(str::trim).collect::<Vec<_>>();
+            if fields.len() != 5 || fields.iter().any(|field| field.is_empty()) {
+                return Err(format!(
+                    "{key} entry {} must contain price-id|symbol|name|contract|decimals",
+                    index + 1
+                ));
+            }
+            let contract_address = fields[3];
+            if contract_address.len() != 42
+                || !contract_address.starts_with("0x")
+                || !contract_address[2..]
+                    .chars()
+                    .all(|character| character.is_ascii_hexdigit())
+            {
+                return Err(format!("{key} entry {} has an invalid contract", index + 1));
+            }
+            let decimals = fields[4]
+                .parse::<u32>()
+                .map_err(|_| format!("{key} entry {} has invalid decimals", index + 1))?;
+            if decimals > 38 {
+                return Err(format!(
+                    "{key} entry {} decimals must be at most 38",
+                    index + 1
+                ));
+            }
+            Ok(EthereumTokenConfig {
+                price_id: fields[0].to_lowercase(),
+                symbol: fields[1].to_uppercase(),
+                name: fields[2].to_string(),
+                contract_address: contract_address.to_string(),
+                decimals,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{parse_opessocius_history, resolve_local_path};
+    use super::{ethereum_tokens, parse_opessocius_history, resolve_local_path};
+
+    #[test]
+    fn parses_configured_ethereum_tokens() {
+        unsafe {
+            std::env::set_var(
+                "TEST_ETHEREUM_TOKENS",
+                "chainlink|LINK|Chainlink|0x514910771AF9Ca656af840dff83E8264EcF986CA|18",
+            );
+        }
+        let tokens = ethereum_tokens("TEST_ETHEREUM_TOKENS").unwrap();
+        unsafe { std::env::remove_var("TEST_ETHEREUM_TOKENS") };
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].price_id, "chainlink");
+        assert_eq!(tokens[0].symbol, "LINK");
+        assert_eq!(tokens[0].decimals, 18);
+    }
 
     #[test]
     fn parses_and_orders_private_opessocius_history() {

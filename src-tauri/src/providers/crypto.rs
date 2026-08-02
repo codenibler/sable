@@ -1,23 +1,38 @@
+use std::collections::HashMap;
+
 use reqwest::Client;
 use serde_json::{Value, json};
 
 use chrono::{DateTime, Duration, Utc};
 
-use crate::{config::Config, models::Wallet, providers::bitcoin_xpub};
+use crate::{
+    config::Config,
+    models::{Wallet, WalletAsset},
+    providers::bitcoin_xpub,
+};
 
 pub async fn prices(client: &Client, config: &Config) -> Result<AssetPrices, String> {
+    let mut ids = vec![
+        "bitcoin".to_string(),
+        "ethereum".to_string(),
+        "solana".to_string(),
+    ];
+    ids.extend(
+        config
+            .ethereum_tokens
+            .iter()
+            .map(|token| token.price_id.clone()),
+    );
+    ids.sort();
+    ids.dedup();
+    let ids = ids.join(",");
+    let currency = config.base_currency.to_lowercase();
     let response: Value = client
         .get(format!(
             "{}/simple/price",
             config.coingecko_base_url.trim_end_matches('/')
         ))
-        .query(&[
-            ("ids", "bitcoin,ethereum,solana"),
-            (
-                "vs_currencies",
-                config.base_currency.to_lowercase().as_str(),
-            ),
-        ])
+        .query(&[("ids", ids.as_str()), ("vs_currencies", currency.as_str())])
         .send()
         .await
         .map_err(network_error)?
@@ -32,12 +47,11 @@ pub async fn prices(client: &Client, config: &Config) -> Result<AssetPrices, Str
         .await
         .map_err(|_| "Price provider returned an unreadable response".to_string())?;
 
-    let currency = config.base_currency.to_lowercase();
-    Ok(AssetPrices {
-        btc: price(&response, "bitcoin", &currency)?,
-        eth: price(&response, "ethereum", &currency)?,
-        sol: price(&response, "solana", &currency)?,
-    })
+    let values = ids
+        .split(',')
+        .map(|id| Ok((id.to_string(), price(&response, id, &currency)?)))
+        .collect::<Result<HashMap<_, _>, String>>()?;
+    Ok(AssetPrices { values })
 }
 
 pub async fn hydrate_wallet(
@@ -47,9 +61,19 @@ pub async fn hydrate_wallet(
     prices: &AssetPrices,
 ) -> bool {
     if wallet.network == "btc" && wallet.wallet_type == "xpub" {
+        let price = prices.get("bitcoin");
         if cache_is_fresh(wallet, config.xpub_refresh_interval_minutes) {
             wallet.symbol = "BTC".to_string();
-            wallet.value = wallet.balance * prices.btc;
+            wallet.value = wallet.balance * price;
+            wallet.assets = vec![wallet_asset(
+                "btc",
+                "btc",
+                "BTC",
+                "Bitcoin",
+                wallet.balance,
+                price,
+                None,
+            )];
             wallet.message = None;
             return false;
         }
@@ -58,39 +82,138 @@ pub async fn hydrate_wallet(
                 wallet.balance = result.balance;
                 wallet.address_count = result.address_count;
                 wallet.symbol = "BTC".to_string();
-                wallet.value = result.balance * prices.btc;
+                wallet.value = result.balance * price;
+                wallet.assets = vec![wallet_asset(
+                    "btc",
+                    "btc",
+                    "BTC",
+                    "Bitcoin",
+                    result.balance,
+                    price,
+                    None,
+                )];
                 wallet.message = None;
                 return true;
             }
             Err(message) => {
-                wallet.value = wallet.balance * prices.btc;
+                wallet.value = wallet.balance * price;
+                wallet.assets = vec![wallet_asset(
+                    "btc",
+                    "btc",
+                    "BTC",
+                    "Bitcoin",
+                    wallet.balance,
+                    price,
+                    Some(message.clone()),
+                )];
                 wallet.message = Some(message);
                 return false;
             }
         }
     }
+    if wallet.network == "eth" {
+        hydrate_ethereum_wallet(client, config, wallet, prices).await;
+        return false;
+    }
     let result = match wallet.network.as_str() {
         "btc" => btc_balance(client, config, &wallet.address)
             .await
-            .map(|balance| (balance, prices.btc, "BTC")),
-        "eth" => eth_balance(client, config, &wallet.address)
-            .await
-            .map(|balance| (balance, prices.eth, "ETH")),
+            .map(|balance| (balance, prices.get("bitcoin"), "btc", "BTC", "Bitcoin")),
         "sol" => sol_balance(client, config, &wallet.address)
             .await
-            .map(|balance| (balance, prices.sol, "SOL")),
+            .map(|balance| (balance, prices.get("solana"), "sol", "SOL", "Solana")),
         _ => Err("Unsupported wallet network".to_string()),
     };
     match result {
-        Ok((balance, price, symbol)) => {
+        Ok((balance, price, id, symbol, name)) => {
             wallet.balance = balance;
             wallet.symbol = symbol.to_string();
             wallet.value = balance * price;
+            wallet.assets = vec![wallet_asset(
+                id,
+                &wallet.network,
+                symbol,
+                name,
+                balance,
+                price,
+                None,
+            )];
             wallet.message = None;
         }
         Err(message) => wallet.message = Some(message),
     }
     false
+}
+
+async fn hydrate_ethereum_wallet(
+    client: &Client,
+    config: &Config,
+    wallet: &mut Wallet,
+    prices: &AssetPrices,
+) {
+    let mut assets = Vec::new();
+    let mut messages = Vec::new();
+    match eth_balance(client, config, &wallet.address).await {
+        Ok(balance) => {
+            let price = prices.get("ethereum");
+            wallet.balance = balance;
+            assets.push(wallet_asset(
+                "eth", "eth", "ETH", "Ethereum", balance, price, None,
+            ));
+        }
+        Err(message) => {
+            wallet.balance = 0.0;
+            messages.push(message);
+        }
+    }
+    for token in &config.ethereum_tokens {
+        match erc20_balance(
+            client,
+            config,
+            &wallet.address,
+            &token.contract_address,
+            token.decimals,
+        )
+        .await
+        {
+            Ok(balance) if balance > 0.0 => assets.push(wallet_asset(
+                &token.symbol.to_lowercase(),
+                "eth",
+                &token.symbol,
+                &token.name,
+                balance,
+                prices.get(&token.price_id),
+                None,
+            )),
+            Ok(_) => {}
+            Err(message) => messages.push(format!("{}: {message}", token.symbol)),
+        }
+    }
+    wallet.symbol = "ETH".to_string();
+    wallet.value = assets.iter().map(|asset| asset.value).sum();
+    wallet.assets = assets;
+    wallet.message = (!messages.is_empty()).then(|| messages.join(" · "));
+}
+
+fn wallet_asset(
+    id: &str,
+    network: &str,
+    symbol: &str,
+    name: &str,
+    balance: f64,
+    price: f64,
+    message: Option<String>,
+) -> WalletAsset {
+    WalletAsset {
+        id: id.to_string(),
+        network: network.to_string(),
+        symbol: symbol.to_string(),
+        name: name.to_string(),
+        balance,
+        price,
+        value: balance * price,
+        message,
+    }
 }
 
 pub struct ValidatedWallet {
@@ -157,9 +280,13 @@ fn cache_is_fresh(wallet: &Wallet, refresh_interval_minutes: i64) -> bool {
 }
 
 pub struct AssetPrices {
-    btc: f64,
-    eth: f64,
-    sol: f64,
+    values: HashMap<String, f64>,
+}
+
+impl AssetPrices {
+    fn get(&self, id: &str) -> f64 {
+        self.values.get(id).copied().unwrap_or_default()
+    }
 }
 
 fn price(response: &Value, asset: &str, currency: &str) -> Result<f64, String> {
@@ -217,6 +344,49 @@ async fn eth_balance(client: &Client, config: &Config, address: &str) -> Result<
     Ok(wei as f64 / 1_000_000_000_000_000_000.0)
 }
 
+async fn erc20_balance(
+    client: &Client,
+    config: &Config,
+    owner: &str,
+    contract: &str,
+    decimals: u32,
+) -> Result<f64, String> {
+    let response: Value = client
+        .post(&config.ethereum_rpc_url)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_call",
+            "params": [{ "to": contract, "data": balance_of_data(owner) }, "latest"]
+        }))
+        .send()
+        .await
+        .map_err(network_error)?
+        .error_for_status()
+        .map_err(provider_status)?
+        .json()
+        .await
+        .map_err(|_| "Ethereum provider returned an unreadable token response".to_string())?;
+    let value = response
+        .pointer("/result")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "Ethereum provider did not return a token balance".to_string())?
+        .trim_start_matches("0x");
+    if value.is_empty() {
+        return Ok(0.0);
+    }
+    let units = u128::from_str_radix(value, 16)
+        .map_err(|_| "Ethereum token balance was invalid".to_string())?;
+    Ok(units as f64 / 10_f64.powi(decimals as i32))
+}
+
+fn balance_of_data(owner: &str) -> String {
+    format!(
+        "0x70a08231{:0>64}",
+        owner.trim().trim_start_matches("0x").to_lowercase()
+    )
+}
+
 async fn sol_balance(client: &Client, config: &Config, address: &str) -> Result<f64, String> {
     let response: Value = client
         .post(&config.solana_rpc_url)
@@ -265,7 +435,7 @@ fn provider_status(error: reqwest::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_wallet;
+    use super::{balance_of_data, validate_wallet};
 
     #[test]
     fn validates_supported_wallet_shapes() {
@@ -278,5 +448,15 @@ mod tests {
     fn rejects_unknown_networks_and_malformed_addresses() {
         assert!(validate_wallet("doge", "anything").is_err());
         assert!(validate_wallet("eth", "0x123").is_err());
+    }
+
+    #[test]
+    fn encodes_erc20_balance_queries_for_an_ethereum_owner() {
+        let data = balance_of_data("0x00000000000000000000000000000000000000ab");
+        assert_eq!(data.len(), 74);
+        assert_eq!(
+            data,
+            "0x70a0823100000000000000000000000000000000000000000000000000000000000000ab"
+        );
     }
 }

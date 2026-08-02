@@ -262,6 +262,7 @@ fn list_wallets(connection: &Connection, portfolio_id: i64) -> Result<Vec<Wallet
                 balance: row.get(6)?,
                 address_count: row.get::<_, i64>(7)?.max(0) as usize,
                 value: 0.0,
+                assets: Vec::new(),
                 message: None,
                 last_checked_at: row.get(8)?,
             })

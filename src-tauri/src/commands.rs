@@ -258,20 +258,18 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                     .iter()
                     .find_map(|wallet| wallet.message.clone()),
             });
-            holdings.extend(portfolio.wallets.iter().map(|wallet| Holding {
-                id: format!("wallet-{}", wallet.id),
-                symbol: wallet.symbol.clone(),
-                name: wallet.label.clone(),
-                source: portfolio.name.clone(),
-                quantity: wallet.balance,
-                price: if wallet.balance > 0.0 {
-                    wallet.value / wallet.balance
-                } else {
-                    0.0
-                },
-                value: wallet.value,
-                return_value: 0.0,
-                allocation: 0.0,
+            holdings.extend(portfolio.wallets.iter().flat_map(|wallet| {
+                wallet.assets.iter().map(|asset| Holding {
+                    id: format!("wallet-{}-{}", wallet.id, asset.id),
+                    symbol: asset.symbol.clone(),
+                    name: format!("{} · {}", asset.name, wallet.label),
+                    source: portfolio.name.clone(),
+                    quantity: asset.balance,
+                    price: asset.price,
+                    value: asset.value,
+                    return_value: 0.0,
+                    allocation: 0.0,
+                })
             }));
         }
 
@@ -499,23 +497,10 @@ fn crypto_assets(
     portfolio: &CryptoPortfolio,
     snapshot_interval_minutes: i64,
 ) -> Result<Vec<CryptoAsset>, String> {
+    let grouped = grouped_crypto_assets(portfolio);
     let mut assets = Vec::new();
-    for (network, symbol, name) in [
-        ("btc", "BTC", "Bitcoin"),
-        ("eth", "ETH", "Ethereum"),
-        ("sol", "SOL", "Solana"),
-    ] {
-        let wallets = portfolio
-            .wallets
-            .iter()
-            .filter(|wallet| wallet.network == network)
-            .collect::<Vec<_>>();
-        if wallets.is_empty() {
-            continue;
-        }
-        let balance = wallets.iter().map(|wallet| wallet.balance).sum::<f64>();
-        let value = wallets.iter().map(|wallet| wallet.value).sum::<f64>();
-        let source_kind = format!("crypto-{network}");
+    for (id, (network, symbol, name, balance, value, wallet_count)) in grouped {
+        let source_kind = format!("crypto-{id}");
         let invested_value =
             db::snapshot_baseline(connection, &source_kind, portfolio.id)?.unwrap_or(value);
         db::save_snapshot(
@@ -529,9 +514,10 @@ fn crypto_assets(
         )?;
         let total_return = value - invested_value;
         assets.push(CryptoAsset {
-            network: network.to_string(),
-            symbol: symbol.to_string(),
-            name: name.to_string(),
+            id,
+            network,
+            symbol,
+            name,
             balance,
             value,
             invested_value,
@@ -542,11 +528,42 @@ fn crypto_assets(
             } else {
                 0.0
             },
-            wallet_count: wallets.len(),
+            wallet_count,
             history: db::source_history(connection, &source_kind, portfolio.id)?,
         });
     }
+    assets.sort_by_key(|asset| match asset.id.as_str() {
+        "btc" => 0,
+        "eth" => 1,
+        "link" => 2,
+        "sol" => 3,
+        _ => 4,
+    });
     Ok(assets)
+}
+
+type GroupedCryptoAssets = BTreeMap<String, (String, String, String, f64, f64, usize)>;
+
+fn grouped_crypto_assets(portfolio: &CryptoPortfolio) -> GroupedCryptoAssets {
+    let mut grouped = BTreeMap::<String, (String, String, String, f64, f64, usize)>::new();
+    for wallet in &portfolio.wallets {
+        for asset in &wallet.assets {
+            let entry = grouped.entry(asset.id.clone()).or_insert_with(|| {
+                (
+                    asset.network.clone(),
+                    asset.symbol.clone(),
+                    asset.name.clone(),
+                    0.0,
+                    0.0,
+                    0,
+                )
+            });
+            entry.3 += asset.balance;
+            entry.4 += asset.value;
+            entry.5 += 1;
+        }
+    }
+    grouped
 }
 
 fn opessocius_portfolio_history(
@@ -882,9 +899,10 @@ pub fn remove_wallet(state: State<'_, AppState>, id: i64) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        accrued_monthly_winnings, distributed_winnings, month_bounds,
+        accrued_monthly_winnings, distributed_winnings, grouped_crypto_assets, month_bounds,
         planned_default_monthly_returns, return_month,
     };
+    use crate::models::{CryptoPortfolio, Wallet, WalletAsset};
     use chrono::{Local, TimeZone};
 
     #[test]
@@ -957,5 +975,59 @@ mod tests {
         let entries = vec![("2026-07-01".to_string(), 310.0)];
         assert_eq!(distributed_winnings(&entries, start, end).unwrap(), 310.0);
         assert_eq!(distributed_winnings(&entries, end, end).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn separates_eth_and_link_held_by_the_same_wallet() {
+        let wallet = Wallet {
+            id: 1,
+            portfolio_id: 1,
+            network: "eth".to_string(),
+            address: "0x0000000000000000000000000000000000000000".to_string(),
+            display_address: "0x0000".to_string(),
+            label: "Trezor Ethereum".to_string(),
+            wallet_type: "address".to_string(),
+            address_count: 1,
+            balance: 2.0,
+            symbol: "ETH".to_string(),
+            value: 320.0,
+            assets: vec![
+                WalletAsset {
+                    id: "eth".to_string(),
+                    network: "eth".to_string(),
+                    symbol: "ETH".to_string(),
+                    name: "Ethereum".to_string(),
+                    balance: 2.0,
+                    price: 100.0,
+                    value: 200.0,
+                    message: None,
+                },
+                WalletAsset {
+                    id: "link".to_string(),
+                    network: "eth".to_string(),
+                    symbol: "LINK".to_string(),
+                    name: "Chainlink".to_string(),
+                    balance: 10.0,
+                    price: 12.0,
+                    value: 120.0,
+                    message: None,
+                },
+            ],
+            message: None,
+            last_checked_at: None,
+        };
+        let grouped = grouped_crypto_assets(&CryptoPortfolio {
+            id: 1,
+            name: "Trezor Safe".to_string(),
+            value: 320.0,
+            return_value: 0.0,
+            assets: Vec::new(),
+            wallets: vec![wallet],
+        });
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped["eth"].3, 2.0);
+        assert_eq!(grouped["eth"].4, 200.0);
+        assert_eq!(grouped["link"].3, 10.0);
+        assert_eq!(grouped["link"].4, 120.0);
     }
 }

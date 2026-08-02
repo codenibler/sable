@@ -121,6 +121,7 @@ pub struct CryptoPortfolio {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CryptoAsset {
+    pub id: String,
     pub network: String,
     pub symbol: String,
     pub name: String,
@@ -149,9 +150,23 @@ pub struct Wallet {
     pub balance: f64,
     pub symbol: String,
     pub value: f64,
+    pub assets: Vec<WalletAsset>,
     pub message: Option<String>,
     #[serde(skip_serializing)]
     pub last_checked_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WalletAsset {
+    pub id: String,
+    pub network: String,
+    pub symbol: String,
+    pub name: String,
+    pub balance: f64,
+    pub price: f64,
+    pub value: f64,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
