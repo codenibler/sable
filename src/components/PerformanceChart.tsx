@@ -24,7 +24,23 @@ function pathFor(values: number[], width: number, height: number, min: number, m
     .join(" ");
 }
 
-export function PerformanceChart({ history, format }: { history: DataPoint[]; format: (value: number) => string }) {
+type PerformanceChartProps = {
+  history: DataPoint[];
+  format: (value: number) => string;
+  title?: string;
+  valueLabel?: string;
+  baselineLabel?: string;
+  emptyText?: string;
+};
+
+export function PerformanceChart({
+  history,
+  format,
+  title = "Performance",
+  valueLabel = "Portfolio value",
+  baselineLabel = "Invested",
+  emptyText = "The equity line will appear after the next scheduled snapshot.",
+}: PerformanceChartProps) {
   const [period, setPeriod] = useState<Period>("1Y");
   const points = useMemo(
     () => history.filter((point) => new Date(point.timestamp).getTime() >= cutoffFor(period)),
@@ -41,7 +57,7 @@ export function PerformanceChart({ history, format }: { history: DataPoint[]; fo
       <div className="panel-heading">
         <div>
           <p className="section-label">Equity</p>
-          <h2>Performance</h2>
+          <h2>{title}</h2>
         </div>
         <div className="periods" aria-label="Chart period">
           {periods.map((item) => (
@@ -76,10 +92,10 @@ export function PerformanceChart({ history, format }: { history: DataPoint[]; fo
         <div className="chart-empty">
           <span className="pulse-dot" />
           <strong>Tracking has started</strong>
-          <p>The equity line will appear after the next scheduled snapshot.</p>
+          <p>{emptyText}</p>
         </div>
       )}
-      <div className="legend"><span><i className="equity-key" />Portfolio value</span><span><i />Invested</span></div>
+      <div className="legend"><span><i className="equity-key" />{valueLabel}</span><span><i />{baselineLabel}</span></div>
     </section>
   );
 }

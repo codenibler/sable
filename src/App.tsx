@@ -67,7 +67,10 @@ function App() {
   const selectedPortfolio = view.startsWith("portfolio:")
     ? dashboard?.monitoredPortfolios.find((portfolio) => `portfolio:${portfolio.id}` === view)
     : undefined;
-  const pageLabel = selectedPortfolio ? "Monitored portfolio" : view === "overview" ? "Net worth" : "On-chain portfolios";
+  const selectedCryptoPortfolio = selectedPortfolio?.kind === "crypto"
+    ? dashboard?.portfolios.find((portfolio) => `portfolio-${portfolio.id}` === selectedPortfolio.id)
+    : undefined;
+  const pageLabel = selectedPortfolio?.kind === "crypto" ? "Hardware wallet" : selectedPortfolio ? "Monitored portfolio" : view === "overview" ? "Net worth" : "On-chain portfolios";
   const pageTitle = selectedPortfolio?.name ?? (view === "overview" ? "Overview" : "Crypto wallets");
 
   return (
@@ -106,7 +109,7 @@ function App() {
             <button className="icon-button" onClick={() => void refresh()} disabled={loading} aria-label="Refresh portfolio">
               <RefreshCw size={18} className={loading ? "spin" : ""} />
             </button>
-            {view === "wallets" && <button className="primary-button" onClick={() => setWalletModal(true)} disabled={!dashboard?.portfolios.length}><Plus size={17} /> Add wallet</button>}
+            {(view === "wallets" || selectedCryptoPortfolio) && <button className="primary-button" onClick={() => setWalletModal(true)} disabled={!dashboard?.portfolios.length}><Plus size={17} /> Add wallet</button>}
           </div>
         </header>
 
@@ -116,6 +119,8 @@ function App() {
 
         {!dashboard && loading ? <Loading /> : dashboard && view === "overview" ? (
           <Overview dashboard={dashboard} formatMoney={formatMoney} onAddWinnings={() => setWinningsModal(true)} />
+        ) : dashboard && selectedPortfolio && selectedCryptoPortfolio ? (
+          <CryptoPortfolioDetailView portfolio={selectedCryptoPortfolio} monitored={selectedPortfolio} formatMoney={formatMoney} />
         ) : dashboard && selectedPortfolio ? (
           <PortfolioDetailView portfolio={selectedPortfolio} formatMoney={formatMoney} onEditReturn={selectedPortfolio.id === "opessocius" && dashboard.opessociusMonthlyReturn ? () => setWinningsModal(true) : undefined} />
         ) : dashboard ? (
@@ -225,6 +230,69 @@ function PortfolioDetailView({ portfolio, formatMoney, onEditReturn }: { portfol
         {[...portfolio.periods].reverse().map((period) => <tr key={period.month}><td><strong>{period.label}</strong></td><td className={period.returnValue >= 0 ? "positive-text" : "negative-text"}>{period.returnPercent.toFixed(2)}%</td><td>{formatMoney(period.returnValue)}</td><td>{period.deposits ? formatMoney(period.deposits) : "—"}</td><td>{period.withdrawals ? formatMoney(period.withdrawals) : "—"}</td><td>{formatMoney(period.endingValue)}</td></tr>)}
       </tbody></table></div>
     </section>}
+  </div>;
+}
+
+function CryptoPortfolioDetailView({ portfolio, monitored, formatMoney }: { portfolio: CryptoPortfolio; monitored: MonitoredPortfolio; formatMoney: (value: number) => string }) {
+  const [selectedNetwork, setSelectedNetwork] = useState<"all" | "btc" | "eth" | "sol">("all");
+  const selectedAsset = selectedNetwork === "all" ? undefined : portfolio.assets.find((asset) => asset.network === selectedNetwork);
+  const visibleWallets = selectedAsset
+    ? portfolio.wallets.filter((wallet) => wallet.network === selectedAsset.network)
+    : portfolio.wallets;
+  const value = selectedAsset?.value ?? monitored.value;
+  const baseline = selectedAsset?.investedValue ?? monitored.investedValue;
+  const totalReturn = selectedAsset?.totalReturn ?? monitored.totalReturn;
+  const returnPercent = selectedAsset?.returnPercent ?? monitored.returnPercent;
+  const positive = totalReturn >= 0;
+  const history = selectedAsset?.history ?? monitored.history;
+  const subject = selectedAsset?.name ?? portfolio.name;
+
+  return <div className="view-stack crypto-detail-view">
+    {!monitored.connected && monitored.message && <div className="notice-row"><span><CircleAlert size={14} />{monitored.message}</span></div>}
+    <section className="hero-metrics portfolio-metrics">
+      <div className="balance-card">
+        <p className="metric-label">{selectedAsset ? `${selectedAsset.symbol} equity` : "Current equity"}</p>
+        <p className="balance">{formatMoney(value)}</p>
+        <span className={positive ? "change positive" : "change negative"}>{positive ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}{returnPercent.toFixed(2)}% · {formatMoney(totalReturn)}</span>
+        <small className="return-method">Since Sable began tracking this {selectedAsset ? "asset" : "wallet"}</small>
+      </div>
+      <Metric label="Tracked baseline" value={formatMoney(baseline)} />
+      <Metric label="Tracked return" value={`${returnPercent.toFixed(2)}%`} helper={formatMoney(totalReturn)} valueClassName={positive ? "positive-text" : "negative-text"} />
+      <Metric
+        label={selectedAsset ? "Coin balance" : "Wallets"}
+        value={selectedAsset ? `${selectedAsset.balance.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${selectedAsset.symbol}` : String(portfolio.wallets.length)}
+        helper={selectedAsset ? `${selectedAsset.walletCount} wallet${selectedAsset.walletCount === 1 ? "" : "s"}` : `${portfolio.assets.length} cryptocurrencies`}
+      />
+    </section>
+
+    <section className="panel asset-breakdown-panel">
+      <div className="panel-heading"><div><p className="section-label">Holdings</p><h2>Cryptocurrencies</h2></div><span className="muted">Select to investigate</span></div>
+      <div className="asset-selector" role="list" aria-label="Cryptocurrency performance">
+        <button className={selectedNetwork === "all" ? "asset-select active" : "asset-select"} onClick={() => setSelectedNetwork("all")}>
+          <span className="network-mark all">Σ</span><span><small>Combined</small><strong>{formatMoney(portfolio.value)}</strong></span><span className={monitored.totalReturn >= 0 ? "positive-text" : "negative-text"}>{monitored.returnPercent.toFixed(2)}%</span>
+        </button>
+        {portfolio.assets.map((asset) => <button className={selectedNetwork === asset.network ? "asset-select active" : "asset-select"} key={asset.network} onClick={() => setSelectedNetwork(asset.network)}>
+          <span className={`network-mark ${asset.network}`}>{asset.symbol.slice(0, 1)}</span><span><small>{asset.name} · {asset.allocation.toFixed(1)}%</small><strong>{formatMoney(asset.value)}</strong></span><span className={asset.totalReturn >= 0 ? "positive-text" : "negative-text"}>{asset.returnPercent.toFixed(2)}%</span>
+        </button>)}
+      </div>
+    </section>
+
+    <PerformanceChart
+      history={history}
+      format={formatMoney}
+      title={`${subject} performance`}
+      valueLabel={selectedAsset ? `${selectedAsset.symbol} value` : "Wallet value"}
+      baselineLabel="First tracked value"
+      emptyText={`Sable recorded the first ${selectedAsset ? selectedAsset.symbol : "wallet"} snapshot today. Performance will appear after the next scheduled snapshot.`}
+    />
+
+    <section className="panel portfolio-panel crypto-wallet-panel">
+      <div className="portfolio-header"><div><p className="section-label">Inside {portfolio.name}</p><h2>{selectedAsset ? `${selectedAsset.symbol} wallets` : "Wallets"}</h2></div><div className="portfolio-total"><strong>{visibleWallets.length}</strong><span className="muted">shown</span></div></div>
+      {visibleWallets.length ? <div className="wallet-list">{visibleWallets.map((wallet) => (
+        <div className="wallet-row wallet-row-readonly" key={wallet.id}><span className={`network-mark ${wallet.network}`}>{wallet.symbol.slice(0, 1)}</span><div className="wallet-identity"><strong>{wallet.label}</strong><small>{wallet.walletType === "xpub" ? `Bitcoin XPUB · ${wallet.addressCount} active derived address${wallet.addressCount === 1 ? "" : "es"}` : `${wallet.displayAddress.slice(0, 10)}…${wallet.displayAddress.slice(-8)}`}</small></div><div className="wallet-balance"><strong>{wallet.balance.toLocaleString(undefined, { maximumFractionDigits: 8 })} {wallet.symbol}</strong><small>{wallet.message ?? formatMoney(wallet.value)}</small></div></div>
+      ))}</div> : <Empty icon={<WalletCards size={22} />} title="No matching wallets" text="Add a public address or XPUB to begin tracking this cryptocurrency." />}
+    </section>
+    <p className="tracking-disclaimer">Tracked return measures value change since Sable’s first local snapshot. It is not tax-lot cost basis and does not infer deposits or withdrawals.</p>
   </div>;
 }
 

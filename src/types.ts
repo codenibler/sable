@@ -45,7 +45,22 @@ export type CryptoPortfolio = {
   name: string;
   value: number;
   returnValue: number;
+  assets: CryptoAsset[];
   wallets: Wallet[];
+};
+
+export type CryptoAsset = {
+  network: Wallet["network"];
+  symbol: string;
+  name: string;
+  balance: number;
+  value: number;
+  investedValue: number;
+  totalReturn: number;
+  returnPercent: number;
+  allocation: number;
+  walletCount: number;
+  history: DataPoint[];
 };
 
 export type Dashboard = {
