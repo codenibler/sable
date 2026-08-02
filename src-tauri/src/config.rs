@@ -1,4 +1,7 @@
-use std::{env, fs};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use chrono::{Datelike, NaiveDate};
 
@@ -46,7 +49,8 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Self, String> {
-        load_dotenv();
+        let dotenv_path = load_dotenv();
+        let config_directory = dotenv_path.as_deref().and_then(Path::parent);
 
         Ok(Self {
             trading212_api_key: optional("TRADING212_API_KEY"),
@@ -86,7 +90,7 @@ impl Config {
             opessocius_net_deposits: non_negative_amount("OPESSOCIUS_NET_DEPOSITS")?,
             opessocius_monthly_return_rate: unit_rate("OPESSOCIUS_MONTHLY_RETURN_RATE")?,
             opessocius_return_start_month: month_start("OPESSOCIUS_RETURN_START_MONTH")?,
-            opessocius_history: opessocius_history("OPESSOCIUS_HISTORY_FILE")?,
+            opessocius_history: opessocius_history("OPESSOCIUS_HISTORY_FILE", config_directory)?,
             configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
             configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
@@ -98,12 +102,12 @@ impl Config {
     }
 }
 
-fn load_dotenv() {
-    if dotenvy::dotenv().is_ok() {
-        return;
+fn load_dotenv() -> Option<PathBuf> {
+    if let Ok(path) = dotenvy::dotenv() {
+        return Some(path);
     }
     let Ok(executable) = env::current_exe() else {
-        return;
+        return None;
     };
     if let Some(path) = executable
         .ancestors()
@@ -111,8 +115,9 @@ fn load_dotenv() {
         .map(|directory| directory.join(".env"))
         .find(|candidate| candidate.is_file())
     {
-        let _ = dotenvy::from_path(path);
+        return dotenvy::from_path(&path).ok().map(|_| path);
     }
+    None
 }
 
 fn optional(key: &str) -> Option<String> {
@@ -161,13 +166,32 @@ fn month_start(key: &str) -> Result<String, String> {
     Ok(date.format("%Y-%m-%d").to_string())
 }
 
-fn opessocius_history(key: &str) -> Result<Vec<OpessociusHistoryRow>, String> {
+fn opessocius_history(
+    key: &str,
+    config_directory: Option<&Path>,
+) -> Result<Vec<OpessociusHistoryRow>, String> {
     let Some(path) = optional(key) else {
         return Ok(Vec::new());
     };
-    let contents = fs::read_to_string(&path)
-        .map_err(|error| format!("Could not read {key} at {path}: {error}"))?;
+    let resolved_path = resolve_local_path(&path, config_directory);
+    let contents = fs::read_to_string(&resolved_path).map_err(|error| {
+        format!(
+            "Could not read {key} at {}: {error}",
+            resolved_path.display()
+        )
+    })?;
     parse_opessocius_history(key, &contents)
+}
+
+fn resolve_local_path(configured_path: &str, config_directory: Option<&Path>) -> PathBuf {
+    let path = PathBuf::from(configured_path);
+    if path.is_absolute() {
+        path
+    } else if let Some(directory) = config_directory {
+        directory.join(path)
+    } else {
+        path
+    }
 }
 
 fn parse_opessocius_history(
@@ -234,7 +258,9 @@ fn configured_list(key: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_opessocius_history;
+    use std::path::Path;
+
+    use super::{parse_opessocius_history, resolve_local_path};
 
     #[test]
     fn parses_and_orders_private_opessocius_history() {
@@ -250,5 +276,20 @@ mod tests {
         assert_eq!(rows[0].month, "2026-06-01");
         assert_eq!(rows[1].ending_balance_eur, 8028.05);
         assert_eq!(rows[0].deposits_eur, 200.0);
+    }
+
+    #[test]
+    fn resolves_private_data_relative_to_the_dotenv_file() {
+        assert_eq!(
+            resolve_local_path(
+                "data/opessocius-history.csv",
+                Some(Path::new("/projects/sable")),
+            ),
+            Path::new("/projects/sable/data/opessocius-history.csv")
+        );
+        assert_eq!(
+            resolve_local_path("/private/history.csv", Some(Path::new("/projects/sable"))),
+            Path::new("/private/history.csv")
+        );
     }
 }
