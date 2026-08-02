@@ -199,7 +199,6 @@ tbody tr:last-child td { border-bottom: 0; }
 .period-return-item > p { margin: 4px 0 0; font-size: var(--font-caption); font-variant-numeric: tabular-nums; }
 .period-return-note { margin: 0; padding: 11px 18px 12px; border-top: 1px solid var(--line-soft); color: #555a57; font-size: var(--font-caption); }
 
-.net-worth-actions { display: flex; justify-content: flex-end; }
 .net-worth-chart-panel { overflow: hidden; }
 .chart-focus { display: grid; text-align: right; font-variant-numeric: tabular-nums; }
 .chart-focus strong { font-size: var(--font-body); font-weight: 600; }

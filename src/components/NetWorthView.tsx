@@ -46,8 +46,6 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
   const latest = entries.at(-1)!;
   return <div className="view-stack net-worth-view">
     {actionError && <div className="error-banner"><CircleAlert size={18} /><div><strong>Could not update net worth</strong><p>{actionError}</p></div></div>}
-    <div className="net-worth-actions"><button className="primary-button" onClick={() => setEditing("new")}><Plus size={16} /> Add snapshot</button></div>
-
     <section className="hero-metrics net-worth-metrics">
       <div className="balance-card">
         <p className="metric-label">Current net worth</p>
@@ -98,7 +96,7 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
     <p className="tracking-disclaimer">Growth includes deposits, withdrawals, and reclassification between categories; it is a balance-sheet progression, not investment return. MoM columns compare each snapshot with the prior recorded date, including multiple entries within one month.</p>
 
     <section className="panel net-worth-history-panel">
-      <div className="panel-heading"><div><p className="section-label">Ledger</p><h2>Snapshot history</h2></div><button className="secondary-button" onClick={() => setEditing("new")}><Plus size={15} /> Add entry</button></div>
+      <div className="panel-heading"><div><p className="section-label">Ledger</p><h2>Snapshot history</h2></div><button className="primary-button" onClick={() => setEditing("new")}><Plus size={15} /> Add snapshot</button></div>
       <div className="table-wrap"><table className="net-worth-table"><thead><tr><th>Date</th><th>Net worth</th>{categories.map((category) => <th key={category.key}>{category.label}</th>)}<th>MoM Δ</th><th>MoM (+)</th><th>MoM (−)</th><th>ATH</th><th /></tr></thead><tbody>
         {[...entries].reverse().map((entry, reverseIndex) => {
           const index = entries.length - 1 - reverseIndex;
