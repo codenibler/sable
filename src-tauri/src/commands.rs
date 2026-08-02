@@ -12,8 +12,8 @@ use crate::{
     config::Config,
     db,
     models::{
-        AddWalletInput, CryptoPortfolio, Dashboard, HistorySyncState, Holding, MonthlyWinnings,
-        PeriodReturn, SourceSummary,
+        AddWalletInput, CryptoPortfolio, Dashboard, HistorySyncState, Holding, MonitoredPortfolio,
+        MonthlyWinnings, PeriodReturn, PortfolioPeriod, SourceSummary,
     },
     providers::{crypto, trading212},
 };
@@ -44,23 +44,35 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         db::cash_history_summary(&database)?
     };
     let (return_month_start, return_month_label) = return_month(Local::now())?;
-    let (opessocius_winnings, return_month_amount, return_month_is_override) = {
+    let (opessocius_winnings, editable_opessocius_return) = {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
-        ensure_default_monthly_returns(
-            &database,
-            state.config.opessocius_current_balance,
-            state.config.opessocius_monthly_return_rate,
-            &state.config.opessocius_return_start_month,
-            &return_month_start,
-        )?;
+        if return_month_start >= state.config.opessocius_return_start_month {
+            ensure_default_monthly_returns(
+                &database,
+                state.config.opessocius_current_balance,
+                state.config.opessocius_monthly_return_rate,
+                &state.config.opessocius_return_start_month,
+                &return_month_start,
+            )?;
+        }
         let winnings = db::monthly_winnings(&database, OPESSOCIUS_SOURCE)?
             .into_iter()
             .filter(|(month, _)| month >= &state.config.opessocius_return_start_month)
             .collect::<Vec<_>>();
-        let (amount, is_override) =
-            db::monthly_winning(&database, OPESSOCIUS_SOURCE, &return_month_start)?
-                .ok_or("Could not determine the latest Opessocius return")?;
-        (winnings, amount, is_override)
+        let editable = if return_month_start >= state.config.opessocius_return_start_month {
+            db::monthly_winning(&database, OPESSOCIUS_SOURCE, &return_month_start)?.map(
+                |(amount, is_override)| MonthlyWinnings {
+                    month: return_month_start.clone(),
+                    label: return_month_label.clone(),
+                    amount,
+                    is_override,
+                    default_rate_percent: state.config.opessocius_monthly_return_rate * 100.0,
+                },
+            )
+        } else {
+            None
+        };
+        (winnings, editable)
     };
     let total_opessocius_winnings: f64 = opessocius_winnings.iter().map(|(_, amount)| amount).sum();
     let trading_result = if state.config.trading212_is_configured() {
@@ -104,6 +116,8 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     let mut notices = Vec::new();
     let mut sources = Vec::new();
     let mut holdings = Vec::new();
+    let trading_connected = trading_result.is_ok();
+    let mut trading_holding_count = 0;
     if let Some(message) = history_sync_error {
         notices.push(format!("Cash history sync paused: {message}"));
     } else if !cash_history.backfill_complete && cash_history.event_count > 0 {
@@ -115,6 +129,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     let history_is_usable = cash_history.backfill_complete && cash_history.event_count > 0;
     let (trading_value, trading_invested, cash_value, trading_return) = match trading_result {
         Ok(overview) => {
+            trading_holding_count = overview.holdings.len();
             let contribution_adjusted_return = if history_is_usable {
                 overview.total_value - cash_history.net_contributions
             } else {
@@ -155,6 +170,13 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     let opessocius_value = state.config.opessocius_current_balance + total_opessocius_winnings;
     let opessocius_invested = state.config.opessocius_net_deposits;
     let opessocius_return = opessocius_value - opessocius_invested;
+    let opessocius_history_through = state
+        .config
+        .opessocius_history
+        .last()
+        .map(|row| month_label(&row.month))
+        .transpose()?
+        .unwrap_or_else(|| "baseline".to_string());
     sources.push(SourceSummary {
         id: "opessocius".to_string(),
         name: state.config.opessocius_name.clone(),
@@ -164,12 +186,16 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         connected: true,
         message: Some(format!(
             "{} · {} monthly returns recorded",
-            if return_month_is_override {
+            if editable_opessocius_return
+                .as_ref()
+                .is_some_and(|monthly| monthly.is_override)
+            {
                 format!("manual {return_month_label} override")
             } else {
                 format!(
-                    "{:.2}% month-end default",
-                    state.config.opessocius_monthly_return_rate * 100.0
+                    "history through {} · {:.2}% monthly thereafter",
+                    opessocius_history_through,
+                    state.config.opessocius_monthly_return_rate * 100.0,
                 )
             },
             opessocius_winnings.len(),
@@ -253,6 +279,21 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         } else {
             trading_invested + crypto_invested + opessocius_invested
         };
+        if trading_connected {
+            db::save_snapshot(
+                &database,
+                "trading212",
+                0,
+                trading_value,
+                if history_is_usable {
+                    cash_history.net_contributions
+                } else {
+                    trading_invested
+                },
+                0.0,
+                state.config.snapshot_interval_minutes,
+            )?;
+        }
         db::save_snapshot(
             &database,
             "total",
@@ -342,6 +383,80 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         point.value = point.value - point.opessocius_winnings + accrued;
     }
 
+    let (opessocius_history, opessocius_periods) =
+        opessocius_portfolio_history(&state.config, &opessocius_winnings)?;
+    let trading_history = {
+        let database = state.database.lock().map_err(|_| "Database lock failed")?;
+        db::source_history(&database, "trading212", 0)?
+    };
+    let trading_basis = if history_is_usable {
+        cash_history.net_contributions
+    } else {
+        trading_invested
+    };
+    let mut monitored_portfolios = vec![
+        MonitoredPortfolio {
+            id: "trading212".to_string(),
+            name: "Trading 212".to_string(),
+            kind: "brokerage".to_string(),
+            value: trading_value,
+            invested_value: trading_basis,
+            total_return: trading_return,
+            return_percent: percent_of(trading_return, trading_basis),
+            history: trading_history,
+            periods: Vec::new(),
+            item_count: trading_holding_count,
+            item_label: "holdings".to_string(),
+            connected: trading_connected,
+            message: sources
+                .iter()
+                .find(|source| source.id == "trading212")
+                .and_then(|source| source.message.clone()),
+        },
+        MonitoredPortfolio {
+            id: "opessocius".to_string(),
+            name: state.config.opessocius_name.clone(),
+            kind: "manual".to_string(),
+            value: opessocius_value,
+            invested_value: opessocius_invested,
+            total_return: opessocius_return,
+            return_percent: percent_of(opessocius_return, opessocius_invested),
+            history: opessocius_history,
+            item_count: opessocius_periods.len(),
+            item_label: "monthly records".to_string(),
+            periods: opessocius_periods,
+            connected: true,
+            message: Some("Authoritative local history".to_string()),
+        },
+    ];
+    {
+        let database = state.database.lock().map_err(|_| "Database lock failed")?;
+        for portfolio in &portfolios {
+            let invested = portfolio.value - portfolio.return_value;
+            monitored_portfolios.push(MonitoredPortfolio {
+                id: format!("portfolio-{}", portfolio.id),
+                name: portfolio.name.clone(),
+                kind: "crypto".to_string(),
+                value: portfolio.value,
+                invested_value: invested,
+                total_return: portfolio.return_value,
+                return_percent: percent_of(portfolio.return_value, invested),
+                history: db::source_history(&database, "portfolio", portfolio.id)?,
+                periods: Vec::new(),
+                item_count: portfolio.wallets.len(),
+                item_label: "wallets".to_string(),
+                connected: portfolio
+                    .wallets
+                    .iter()
+                    .all(|wallet| wallet.message.is_none()),
+                message: portfolio
+                    .wallets
+                    .iter()
+                    .find_map(|wallet| wallet.message.clone()),
+            });
+        }
+    }
+
     Ok(Dashboard {
         total_value,
         invested_value,
@@ -354,13 +469,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         },
         monthly_return,
         yearly_return,
-        opessocius_monthly_return: MonthlyWinnings {
-            month: return_month_start,
-            label: return_month_label,
-            amount: return_month_amount,
-            is_override: return_month_is_override,
-            default_rate_percent: state.config.opessocius_monthly_return_rate * 100.0,
-        },
+        opessocius_monthly_return: editable_opessocius_return,
         net_contributions: cash_history.net_contributions + opessocius_invested,
         history_event_count: cash_history.event_count,
         history_backfill_complete: cash_history.backfill_complete,
@@ -370,8 +479,82 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         sources,
         holdings,
         portfolios,
+        monitored_portfolios,
         notices,
     })
+}
+
+fn percent_of(amount: f64, basis: f64) -> f64 {
+    if basis > 0.0 {
+        amount / basis * 100.0
+    } else {
+        0.0
+    }
+}
+
+fn opessocius_portfolio_history(
+    config: &Config,
+    automatic_returns: &[(String, f64)],
+) -> Result<(Vec<crate::models::DataPoint>, Vec<PortfolioPeriod>), String> {
+    let mut history = Vec::new();
+    let mut periods = Vec::new();
+    let mut invested = config
+        .opessocius_history
+        .first()
+        .map(|row| row.ending_balance_eur - row.return_eur - row.deposits_eur + row.withdrawals_eur)
+        .unwrap_or(config.opessocius_net_deposits);
+
+    for row in &config.opessocius_history {
+        invested += row.deposits_eur - row.withdrawals_eur;
+        history.push(crate::models::DataPoint {
+            timestamp: month_end_timestamp(&row.month)?,
+            value: row.ending_balance_eur,
+            invested,
+            opessocius_winnings: 0.0,
+        });
+        periods.push(PortfolioPeriod {
+            month: row.month.clone(),
+            label: month_label(&row.month)?,
+            return_percent: row.return_percent,
+            return_value: row.return_eur,
+            deposits: row.deposits_eur,
+            withdrawals: row.withdrawals_eur,
+            ending_value: row.ending_balance_eur,
+        });
+    }
+
+    let mut value = config.opessocius_current_balance;
+    for (month, amount) in automatic_returns {
+        let opening = value;
+        value += amount;
+        history.push(crate::models::DataPoint {
+            timestamp: month_end_timestamp(month)?,
+            value,
+            invested: config.opessocius_net_deposits,
+            opessocius_winnings: 0.0,
+        });
+        periods.push(PortfolioPeriod {
+            month: month.clone(),
+            label: month_label(month)?,
+            return_percent: percent_of(*amount, opening),
+            return_value: *amount,
+            deposits: 0.0,
+            withdrawals: 0.0,
+            ending_value: value,
+        });
+    }
+    Ok((history, periods))
+}
+
+fn month_end_timestamp(month: &str) -> Result<String, String> {
+    let (_, end) = month_bounds(month)?;
+    Ok((end - Duration::seconds(1)).to_rfc3339())
+}
+
+fn month_label(month: &str) -> Result<String, String> {
+    NaiveDate::parse_from_str(month, "%Y-%m-%d")
+        .map(|date| date.format("%B %Y").to_string())
+        .map_err(|_| "Stored Opessocius history contains an invalid month".to_string())
 }
 
 pub(crate) async fn sync_trading_history(state: &AppState) -> Result<(), String> {
@@ -594,6 +777,9 @@ pub fn set_opessocius_monthly_return(
         return Err("Monthly return must be a valid amount".to_string());
     }
     let (month_start, _) = return_month(Local::now())?;
+    if month_start < state.config.opessocius_return_start_month {
+        return Err("There is no automatic Opessocius return to override yet".to_string());
+    }
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
     db::save_monthly_winnings(&database, OPESSOCIUS_SOURCE, &month_start, amount, true)
 }
@@ -683,20 +869,20 @@ mod tests {
     }
 
     #[test]
-    fn starts_automatic_returns_in_july_2026() {
+    fn starts_automatic_returns_after_the_authoritative_history() {
         let planned =
-            planned_default_monthly_returns(&[], 1_000.0, 0.02, "2026-07-01", "2026-08-01")
+            planned_default_monthly_returns(&[], 1_000.0, 0.02, "2026-08-01", "2026-09-01")
                 .unwrap();
         assert_eq!(
             planned,
             vec![
-                ("2026-07-01".to_string(), 20.0),
-                ("2026-08-01".to_string(), 20.4),
+                ("2026-08-01".to_string(), 20.0),
+                ("2026-09-01".to_string(), 20.4),
             ]
         );
 
         assert!(
-            planned_default_monthly_returns(&[], 1_000.0, 0.02, "2026-07-01", "2026-06-01",)
+            planned_default_monthly_returns(&[], 1_000.0, 0.02, "2026-08-01", "2026-07-01",)
                 .unwrap()
                 .is_empty()
         );

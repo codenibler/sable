@@ -281,6 +281,12 @@ pub fn create_portfolio(connection: &Connection, name: &str) -> Result<i64, Stri
 
 pub fn ensure_portfolio(connection: &Connection) -> Result<i64, String> {
     connection
+        .execute(
+            "UPDATE portfolios SET name = 'Trezor Safe' WHERE name = 'Crypto'",
+            [],
+        )
+        .map_err(to_string)?;
+    connection
         .query_row(
             "SELECT id FROM portfolios ORDER BY created_at, id LIMIT 1",
             [],
@@ -288,7 +294,7 @@ pub fn ensure_portfolio(connection: &Connection) -> Result<i64, String> {
         )
         .optional()
         .map_err(to_string)?
-        .map_or_else(|| create_portfolio(connection, "Crypto"), Ok)
+        .map_or_else(|| create_portfolio(connection, "Trezor Safe"), Ok)
 }
 
 pub fn add_wallet(
@@ -407,14 +413,22 @@ pub fn save_snapshot(
 }
 
 pub fn total_history(connection: &Connection) -> Result<Vec<DataPoint>, String> {
+    source_history(connection, "total", 0)
+}
+
+pub fn source_history(
+    connection: &Connection,
+    source_kind: &str,
+    source_id: i64,
+) -> Result<Vec<DataPoint>, String> {
     let mut statement = connection
         .prepare(
             "SELECT captured_at, value_eur, invested_eur, opessocius_winnings_eur FROM snapshots
-             WHERE source_kind = 'total' ORDER BY captured_at DESC LIMIT 500",
+             WHERE source_kind = ?1 AND source_id = ?2 ORDER BY captured_at DESC LIMIT 500",
         )
         .map_err(to_string)?;
     let mut points = statement
-        .query_map([], |row| {
+        .query_map(params![source_kind, source_id], |row| {
             Ok(DataPoint {
                 timestamp: row.get(0)?,
                 value: row.get(1)?,
@@ -617,7 +631,9 @@ mod tests {
         let first = ensure_portfolio(&database).expect("initial portfolio");
         let second = ensure_portfolio(&database).expect("existing portfolio");
         assert_eq!(first, second);
-        assert_eq!(list_portfolios(&database).unwrap().len(), 1);
+        let portfolios = list_portfolios(&database).unwrap();
+        assert_eq!(portfolios.len(), 1);
+        assert_eq!(portfolios[0].name, "Trezor Safe");
     }
 
     #[test]

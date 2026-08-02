@@ -1,6 +1,16 @@
-use std::env;
+use std::{env, fs};
 
 use chrono::{Datelike, NaiveDate};
+
+#[derive(Clone, Debug)]
+pub struct OpessociusHistoryRow {
+    pub month: String,
+    pub return_percent: f64,
+    pub return_eur: f64,
+    pub deposits_eur: f64,
+    pub withdrawals_eur: f64,
+    pub ending_balance_eur: f64,
+}
 
 #[derive(Clone)]
 pub struct Config {
@@ -28,6 +38,7 @@ pub struct Config {
     pub opessocius_net_deposits: f64,
     pub opessocius_monthly_return_rate: f64,
     pub opessocius_return_start_month: String,
+    pub opessocius_history: Vec<OpessociusHistoryRow>,
     pub configured_bitcoin_xpubs: Vec<String>,
     pub configured_ethereum_addresses: Vec<String>,
     pub configured_solana_addresses: Vec<String>,
@@ -75,6 +86,7 @@ impl Config {
             opessocius_net_deposits: non_negative_amount("OPESSOCIUS_NET_DEPOSITS")?,
             opessocius_monthly_return_rate: unit_rate("OPESSOCIUS_MONTHLY_RETURN_RATE")?,
             opessocius_return_start_month: month_start("OPESSOCIUS_RETURN_START_MONTH")?,
+            opessocius_history: opessocius_history("OPESSOCIUS_HISTORY_FILE")?,
             configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
             configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
@@ -149,6 +161,62 @@ fn month_start(key: &str) -> Result<String, String> {
     Ok(date.format("%Y-%m-%d").to_string())
 }
 
+fn opessocius_history(key: &str) -> Result<Vec<OpessociusHistoryRow>, String> {
+    let Some(path) = optional(key) else {
+        return Ok(Vec::new());
+    };
+    let contents = fs::read_to_string(&path)
+        .map_err(|error| format!("Could not read {key} at {path}: {error}"))?;
+    parse_opessocius_history(key, &contents)
+}
+
+fn parse_opessocius_history(
+    key: &str,
+    contents: &str,
+) -> Result<Vec<OpessociusHistoryRow>, String> {
+    let mut rows = Vec::new();
+    for (index, line) in contents.lines().enumerate().skip(1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields = line.split(',').map(str::trim).collect::<Vec<_>>();
+        if fields.len() != 6 {
+            return Err(format!("{key} row {} must contain 6 columns", index + 1));
+        }
+        let month = month_value(key, fields[0], index + 1)?;
+        rows.push(OpessociusHistoryRow {
+            month,
+            return_percent: decimal_value(key, "return_percent", fields[1], index + 1)?,
+            return_eur: decimal_value(key, "return_eur", fields[2], index + 1)?,
+            deposits_eur: decimal_value(key, "deposits_eur", fields[3], index + 1)?,
+            withdrawals_eur: decimal_value(key, "withdrawals_eur", fields[4], index + 1)?,
+            ending_balance_eur: decimal_value(key, "ending_balance_eur", fields[5], index + 1)?,
+        });
+    }
+    rows.sort_by(|left, right| left.month.cmp(&right.month));
+    Ok(rows)
+}
+
+fn month_value(key: &str, value: &str, row: usize) -> Result<String, String> {
+    let date = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map_err(|_| format!("{key} row {row} has an invalid month"))?;
+    if date.day() != 1 {
+        return Err(format!("{key} row {row} must start on the first day"));
+    }
+    Ok(date.format("%Y-%m-%d").to_string())
+}
+
+fn decimal_value(key: &str, column: &str, value: &str, row: usize) -> Result<f64, String> {
+    let number = value
+        .parse::<f64>()
+        .map_err(|_| format!("{key} row {row} has an invalid {column}"))?;
+    if number.is_finite() {
+        Ok(number)
+    } else {
+        Err(format!("{key} row {row} has an invalid {column}"))
+    }
+}
+
 fn configured_list(key: &str) -> Vec<String> {
     optional(key)
         .map(|value| {
@@ -162,4 +230,25 @@ fn configured_list(key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_opessocius_history;
+
+    #[test]
+    fn parses_and_orders_private_opessocius_history() {
+        let rows = parse_opessocius_history(
+            "OPESSOCIUS_HISTORY_FILE",
+            "month,return_percent,return_eur,deposits_eur,withdrawals_eur,ending_balance_eur\n\
+             2026-07-01,2,157.41,0,0,8028.05\n\
+             2026-06-01,2,150.35,200,0,7870.63\n",
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].month, "2026-06-01");
+        assert_eq!(rows[1].ending_balance_eur, 8028.05);
+        assert_eq!(rows[0].deposits_eur, 200.0);
+    }
 }

@@ -10,7 +10,7 @@ pub struct Dashboard {
     pub return_percent: f64,
     pub monthly_return: PeriodReturn,
     pub yearly_return: PeriodReturn,
-    pub opessocius_monthly_return: MonthlyWinnings,
+    pub opessocius_monthly_return: Option<MonthlyWinnings>,
     pub net_contributions: f64,
     pub history_event_count: i64,
     pub history_backfill_complete: bool,
@@ -20,6 +20,7 @@ pub struct Dashboard {
     pub sources: Vec<SourceSummary>,
     pub holdings: Vec<Holding>,
     pub portfolios: Vec<CryptoPortfolio>,
+    pub monitored_portfolios: Vec<MonitoredPortfolio>,
     pub notices: Vec<String>,
 }
 
@@ -40,7 +41,7 @@ pub struct PeriodReturn {
     pub percent: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataPoint {
     pub timestamp: String,
@@ -48,6 +49,36 @@ pub struct DataPoint {
     pub invested: f64,
     #[serde(skip_serializing)]
     pub opessocius_winnings: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitoredPortfolio {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub value: f64,
+    pub invested_value: f64,
+    pub total_return: f64,
+    pub return_percent: f64,
+    pub history: Vec<DataPoint>,
+    pub periods: Vec<PortfolioPeriod>,
+    pub item_count: usize,
+    pub item_label: String,
+    pub connected: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortfolioPeriod {
+    pub month: String,
+    pub label: String,
+    pub return_percent: f64,
+    pub return_value: f64,
+    pub deposits: f64,
+    pub withdrawals: f64,
+    pub ending_value: f64,
 }
 
 #[derive(Debug, Serialize)]

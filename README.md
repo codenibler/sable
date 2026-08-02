@@ -7,11 +7,12 @@ The interface uses [General Sans](https://www.fontshare.com/fonts/general-sans) 
 ## Current scope
 
 - Read-only Trading 212 account summary and open positions
-- One automatically created crypto portfolio
+- One automatically created Trezor Safe crypto portfolio
 - BTC public addresses and account-level mainnet `xpub`, `ypub`, or `zpub` keys
 - Any number of ETH and SOL public addresses
 - Native BTC, ETH, and SOL balances with EUR pricing
-- Local Opessocius baseline with automatic month-end returns and editable overrides stored in SQLite
+- Private local Opessocius monthly history with automatic future returns and editable overrides
+- Clickable per-portfolio equity charts and metrics for Trading 212, Opessocius, and Trezor Safe
 - Combined and crypto hourly snapshots in local SQLite
 - Resumable Trading 212 cash-history backfill with net deposits and simple total return
 - Responsive React interface designed to carry forward to Tauri iOS
@@ -31,7 +32,7 @@ npm run tauri dev
 
 Fill in `TRADING212_API_KEY` and `TRADING212_API_SECRET` using a key with only the account and portfolio read permissions required by the app. Never grant order permissions.
 
-The existing `.env` is ignored by Git. Wallets can be imported at startup with `HWR_BITCOIN_XPUBS`, `HWR_ETHEREUM_ADDRESSES`, and `HWR_SOLANA_ADDRESSES`; comma-separated entries are accepted and repeated starts do not duplicate them. Opessocius uses `OPESSOCIUS_CURRENT_BALANCE` and `OPESSOCIUS_NET_DEPOSITS` as its baseline and never makes a network request. Automatic returns begin at `OPESSOCIUS_RETURN_START_MONTH` (July 2026 by default). On each month's final calendar day, `OPESSOCIUS_MONTHLY_RETURN_RATE` is applied to that month's opening balance (2% by default); shorter months use their actual final day, and missed completed months are compounded in sequence. The UI can override the latest completed month's total return, including with a negative amount. Overrides replace the default and are distributed across that month for chart and period-return calculations. Runtime endpoints, currency, timeouts, snapshot cadence, XPUB scan limits, and the database filename are also configured there. The SQLite database is stored under the operating system's application-data directory, not in this repository.
+The existing `.env` is ignored by Git. Wallets can be imported at startup with `HWR_BITCOIN_XPUBS`, `HWR_ETHEREUM_ADDRESSES`, and `HWR_SOLANA_ADDRESSES`; comma-separated entries are accepted and repeated starts do not duplicate them. Opessocius uses `OPESSOCIUS_CURRENT_BALANCE` and `OPESSOCIUS_NET_DEPOSITS` as its baseline and never makes a network request. `OPESSOCIUS_HISTORY_FILE` points to an ignored local CSV containing the authoritative monthly ledger through July 2026, so private figures are not committed. Automatic returns begin at `OPESSOCIUS_RETURN_START_MONTH` (August 2026 by default). On each month's final calendar day, `OPESSOCIUS_MONTHLY_RETURN_RATE` is applied to that month's opening balance (2% by default); shorter months use their actual final day, and missed completed months are compounded in sequence. The UI can override the latest completed automatic return, including with a negative amount. Overrides replace the default and are distributed across that month for chart and period-return calculations. Runtime endpoints, currency, timeouts, snapshot cadence, XPUB scan limits, and the database filename are also configured there. The SQLite database is stored under the operating system's application-data directory, not in this repository.
 
 ## Verification
 
