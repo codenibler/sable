@@ -26,6 +26,23 @@ import type { AddWalletInput, CryptoPortfolio, Dashboard, MonitoredPortfolio, Mo
 
 type View = "net-worth" | "overview" | "wallets" | `portfolio:${string}`;
 
+const FONT_SCALE_KEY = "sable-font-scale";
+const DEFAULT_FONT_SCALE = 100;
+const MIN_FONT_SCALE = 75;
+const MAX_FONT_SCALE = 130;
+const FONT_SCALE_STEP = 5;
+
+function initialFontScale() {
+  try {
+    const stored = Number.parseInt(localStorage.getItem(FONT_SCALE_KEY) ?? "", 10);
+    return Number.isFinite(stored)
+      ? Math.min(MAX_FONT_SCALE, Math.max(MIN_FONT_SCALE, stored))
+      : DEFAULT_FONT_SCALE;
+  } catch {
+    return DEFAULT_FONT_SCALE;
+  }
+}
+
 function messageOf(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
@@ -41,6 +58,7 @@ function App() {
   const [walletModal, setWalletModal] = useState(false);
   const [winningsModal, setWinningsModal] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [fontScale, setFontScale] = useState(initialFontScale);
   const refreshing = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -91,6 +109,34 @@ function App() {
     );
     return () => window.clearInterval(interval);
   }, [dashboard?.refreshIntervalMinutes, refresh]);
+
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${fontScale}%`;
+    try {
+      localStorage.setItem(FONT_SCALE_KEY, String(fontScale));
+    } catch {
+      // The current session still uses the selected size if storage is unavailable.
+    }
+  }, [fontScale]);
+
+  useEffect(() => {
+    const handleFontScale = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.altKey) return;
+      const increase = event.key === "+" || event.key === "=" || event.code === "NumpadAdd";
+      const decrease = event.key === "-" || event.code === "NumpadSubtract";
+      const reset = event.key === "0" || event.code === "Numpad0";
+      if (!increase && !decrease && !reset) return;
+
+      event.preventDefault();
+      setFontScale((current) => {
+        if (reset) return DEFAULT_FONT_SCALE;
+        const change = increase ? FONT_SCALE_STEP : -FONT_SCALE_STEP;
+        return Math.min(MAX_FONT_SCALE, Math.max(MIN_FONT_SCALE, current + change));
+      });
+    };
+    window.addEventListener("keydown", handleFontScale);
+    return () => window.removeEventListener("keydown", handleFontScale);
+  }, []);
 
   const currency = dashboard?.currency ?? "EUR";
   const money = useMemo(
