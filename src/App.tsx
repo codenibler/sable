@@ -4,8 +4,12 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   BriefcaseBusiness,
+  Building2,
   CircleAlert,
+  HardDrive,
   LayoutDashboard,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   WalletCards,
@@ -13,9 +17,9 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { PerformanceChart } from "./components/PerformanceChart";
-import type { AddWalletInput, CryptoPortfolio, Dashboard, MonthlyWinnings, PeriodReturn } from "./types";
+import type { AddWalletInput, CryptoPortfolio, Dashboard, MonitoredPortfolio, MonthlyWinnings, PeriodReturn } from "./types";
 
-type View = "overview" | "wallets";
+type View = "overview" | "wallets" | `portfolio:${string}`;
 
 function messageOf(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -28,6 +32,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [walletModal, setWalletModal] = useState(false);
   const [winningsModal, setWinningsModal] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -59,48 +64,53 @@ function App() {
     [currency],
   );
   const formatMoney = (value: number) => money.format(value);
+  const selectedPortfolio = view.startsWith("portfolio:")
+    ? dashboard?.monitoredPortfolios.find((portfolio) => `portfolio:${portfolio.id}` === view)
+    : undefined;
+  const pageLabel = selectedPortfolio ? "Monitored portfolio" : view === "overview" ? "Net worth" : "On-chain portfolios";
+  const pageTitle = selectedPortfolio?.name ?? (view === "overview" ? "Overview" : "Crypto wallets");
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar">
+        <button className="sidebar-toggle" onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>
+          {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+        </button>
         <div className="brand-lockup" aria-label="Sable">
           <span className="brand-glyph">S</span>
           <strong>Sable</strong>
         </div>
         <nav>
           <button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}>
-            <LayoutDashboard size={18} /> Overview
+            <LayoutDashboard size={18} /><span className="nav-copy">Overview</span>
           </button>
+          <p className="section-label sidebar-section-label">Portfolios</p>
+          {dashboard?.monitoredPortfolios.map((portfolio) => (
+            <button className={view === `portfolio:${portfolio.id}` ? "active portfolio-nav-item" : "portfolio-nav-item"} key={portfolio.id} onClick={() => setView(`portfolio:${portfolio.id}`)} title={portfolio.name}>
+              {portfolio.kind === "brokerage" ? <Building2 size={18} /> : portfolio.kind === "manual" ? <BriefcaseBusiness size={18} /> : <HardDrive size={18} />}
+              <span className="nav-copy"><strong>{portfolio.name}</strong><small>{formatMoney(portfolio.value)}</small></span>
+            </button>
+          ))}
+          <p className="section-label sidebar-section-label">Manage</p>
           <button className={view === "wallets" ? "active" : ""} onClick={() => setView("wallets")}>
-            <WalletCards size={18} /> Crypto wallets
+            <WalletCards size={18} /><span className="nav-copy">Crypto wallets</span>
           </button>
         </nav>
-        <div className="sidebar-status">
-          <p className="section-label">Connections</p>
-          {dashboard?.sources.map((source) => (
-            <div className="connection" key={source.id} title={source.message ?? undefined}>
-              <span className={source.connected ? "status-dot ok" : "status-dot"} />
-              <span>{source.name}</span>
-            </div>
-          ))}
-        </div>
-        <p className="local-note"><span className="status-dot ok" /> Local-only storage</p>
+        <p className="local-note"><span className="status-dot ok" /><span className="nav-copy">Local-only storage</span></p>
       </aside>
 
       <main className="content">
         <header className="topbar">
           <div>
-            <p className="section-label">{view === "overview" ? "Net worth" : "On-chain portfolios"}</p>
-            <h1>{view === "overview" ? "Overview" : "Crypto wallets"}</h1>
+            <p className="section-label">{pageLabel}</p>
+            <h1>{pageTitle}</h1>
             {dashboard && <p className="updated">Updated {new Date(dashboard.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>}
           </div>
           <div className="topbar-actions">
             <button className="icon-button" onClick={() => void refresh()} disabled={loading} aria-label="Refresh portfolio">
               <RefreshCw size={18} className={loading ? "spin" : ""} />
             </button>
-            <button className="primary-button" onClick={() => setWalletModal(true)} disabled={!dashboard?.portfolios.length}>
-              <Plus size={17} /> Add wallet
-            </button>
+            {view === "wallets" && <button className="primary-button" onClick={() => setWalletModal(true)} disabled={!dashboard?.portfolios.length}><Plus size={17} /> Add wallet</button>}
           </div>
         </header>
 
@@ -110,6 +120,8 @@ function App() {
 
         {!dashboard && loading ? <Loading /> : dashboard && view === "overview" ? (
           <Overview dashboard={dashboard} formatMoney={formatMoney} onAddWinnings={() => setWinningsModal(true)} />
+        ) : dashboard && selectedPortfolio ? (
+          <PortfolioDetailView portfolio={selectedPortfolio} formatMoney={formatMoney} onEditReturn={selectedPortfolio.id === "opessocius" && dashboard.opessociusMonthlyReturn ? () => setWinningsModal(true) : undefined} />
         ) : dashboard ? (
           <Wallets
             portfolios={dashboard.portfolios}
@@ -123,7 +135,7 @@ function App() {
       {walletModal && dashboard && (
         <WalletModal portfolios={dashboard.portfolios} onClose={() => setWalletModal(false)} onSaved={async () => { setWalletModal(false); await refresh(); }} />
       )}
-      {winningsModal && dashboard && (
+      {winningsModal && dashboard?.opessociusMonthlyReturn && (
         <WinningsModal winnings={dashboard.opessociusMonthlyReturn} currency={dashboard.currency} onClose={() => setWinningsModal(false)} onSaved={async () => { setWinningsModal(false); await refresh(); }} />
       )}
     </div>
@@ -183,7 +195,7 @@ function Overview({ dashboard, formatMoney, onAddWinnings }: { dashboard: Dashbo
             <div className="panel-heading"><div><p className="section-label">Breakdown</p><h2>Sources</h2></div></div>
             <div className="source-list">
               {dashboard.sources.map((source) => (
-                <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div className="source-copy"><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small>{source.id === "opessocius" && <button className="source-action" onClick={onAddWinnings}>{dashboard.opessociusMonthlyReturn.isOverride ? "Edit return" : "Override return"}</button>}</div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
+                <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div className="source-copy"><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small>{source.id === "opessocius" && dashboard.opessociusMonthlyReturn && <button className="source-action" onClick={onAddWinnings}>{dashboard.opessociusMonthlyReturn.isOverride ? "Edit return" : "Override return"}</button>}</div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
               ))}
             </div>
           </div>
@@ -192,6 +204,32 @@ function Overview({ dashboard, formatMoney, onAddWinnings }: { dashboard: Dashbo
       </section>
     </div>
   );
+}
+
+function PortfolioDetailView({ portfolio, formatMoney, onEditReturn }: { portfolio: MonitoredPortfolio; formatMoney: (value: number) => string; onEditReturn?: () => void }) {
+  const positive = portfolio.totalReturn >= 0;
+  const latestPeriod = portfolio.periods.at(-1);
+  return <div className="view-stack portfolio-detail-view">
+    {!portfolio.connected && portfolio.message && <div className="notice-row"><span><CircleAlert size={14} />{portfolio.message}</span></div>}
+    <section className="hero-metrics portfolio-metrics">
+      <div className="balance-card">
+        <p className="metric-label">Current equity</p>
+        <p className="balance">{formatMoney(portfolio.value)}</p>
+        <span className={positive ? "change positive" : "change negative"}>{positive ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}{portfolio.returnPercent.toFixed(2)}% · {formatMoney(portfolio.totalReturn)}</span>
+        <small className="return-method">{portfolio.connected ? "Portfolio connected" : "Showing last available history"}</small>
+      </div>
+      <Metric label="Invested" value={formatMoney(portfolio.investedValue)} />
+      <Metric label="Total return" value={`${portfolio.returnPercent.toFixed(2)}%`} helper={formatMoney(portfolio.totalReturn)} valueClassName={positive ? "positive-text" : "negative-text"} />
+      <Metric label={latestPeriod ? "Latest month" : portfolio.itemLabel} value={latestPeriod ? `${latestPeriod.returnPercent.toFixed(2)}%` : String(portfolio.itemCount)} helper={latestPeriod ? formatMoney(latestPeriod.returnValue) : `${portfolio.itemCount} ${portfolio.itemLabel}`} valueClassName={latestPeriod ? latestPeriod.returnValue >= 0 ? "positive-text" : "negative-text" : undefined} />
+    </section>
+    <PerformanceChart history={portfolio.history} format={formatMoney} />
+    {portfolio.periods.length > 0 && <section className="panel history-panel">
+      <div className="panel-heading"><div><p className="section-label">Monthly ledger</p><h2>Opessocius history</h2></div>{onEditReturn && <button className="secondary-button" onClick={onEditReturn}>Edit latest return</button>}</div>
+      <div className="table-wrap"><table><thead><tr><th>Month</th><th>Rate</th><th>Return</th><th>Deposits</th><th>Withdrawals</th><th>Ending equity</th></tr></thead><tbody>
+        {[...portfolio.periods].reverse().map((period) => <tr key={period.month}><td><strong>{period.label}</strong></td><td className={period.returnValue >= 0 ? "positive-text" : "negative-text"}>{period.returnPercent.toFixed(2)}%</td><td>{formatMoney(period.returnValue)}</td><td>{period.deposits ? formatMoney(period.deposits) : "—"}</td><td>{period.withdrawals ? formatMoney(period.withdrawals) : "—"}</td><td>{formatMoney(period.endingValue)}</td></tr>)}
+      </tbody></table></div>
+    </section>}
+  </div>;
 }
 
 function PeriodReturns({ monthly, yearly, formatMoney }: { monthly: PeriodReturn; yearly: PeriodReturn; formatMoney: (value: number) => string }) {

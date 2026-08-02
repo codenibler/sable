@@ -13,9 +13,7 @@ function cutoffFor(period: Period) {
   return now.getTime() - days * 24 * 60 * 60 * 1000;
 }
 
-function pathFor(values: number[], width: number, height: number) {
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+function pathFor(values: number[], width: number, height: number, min: number, max: number) {
   const spread = Math.max(max - min, Math.max(max * 0.02, 1));
   return values
     .map((value, index) => {
@@ -32,8 +30,11 @@ export function PerformanceChart({ history, format }: { history: DataPoint[]; fo
     () => history.filter((point) => new Date(point.timestamp).getTime() >= cutoffFor(period)),
     [history, period],
   );
-  const line = points.length > 1 ? pathFor(points.map((point) => point.value), 1000, 250) : "";
-  const invested = points.length > 1 ? pathFor(points.map((point) => point.invested), 1000, 250) : "";
+  const chartValues = points.flatMap((point) => [point.value, point.invested]);
+  const min = Math.min(...chartValues);
+  const max = Math.max(...chartValues);
+  const line = points.length > 1 ? pathFor(points.map((point) => point.value), 1000, 250, min, max) : "";
+  const invested = points.length > 1 ? pathFor(points.map((point) => point.invested), 1000, 250, min, max) : "";
 
   return (
     <section className="panel chart-panel">

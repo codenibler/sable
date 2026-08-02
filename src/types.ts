@@ -56,7 +56,7 @@ export type Dashboard = {
   returnPercent: number;
   monthlyReturn: PeriodReturn;
   yearlyReturn: PeriodReturn;
-  opessociusMonthlyReturn: MonthlyWinnings;
+  opessociusMonthlyReturn: MonthlyWinnings | null;
   netContributions: number;
   historyEventCount: number;
   historyBackfillComplete: boolean;
@@ -66,7 +66,34 @@ export type Dashboard = {
   sources: SourceSummary[];
   holdings: Holding[];
   portfolios: CryptoPortfolio[];
+  monitoredPortfolios: MonitoredPortfolio[];
   notices: string[];
+};
+
+export type MonitoredPortfolio = {
+  id: string;
+  name: string;
+  kind: SourceSummary["kind"];
+  value: number;
+  investedValue: number;
+  totalReturn: number;
+  returnPercent: number;
+  history: DataPoint[];
+  periods: PortfolioPeriod[];
+  itemCount: number;
+  itemLabel: string;
+  connected: boolean;
+  message: string | null;
+};
+
+export type PortfolioPeriod = {
+  month: string;
+  label: string;
+  returnPercent: number;
+  returnValue: number;
+  deposits: number;
+  withdrawals: number;
+  endingValue: number;
 };
 
 export type MonthlyWinnings = {
