@@ -76,10 +76,6 @@ function App() {
         <button className="sidebar-toggle" onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>
           {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
         </button>
-        <div className="brand-lockup" aria-label="Sable">
-          <span className="brand-glyph">S</span>
-          <strong>Sable</strong>
-        </div>
         <nav>
           <button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}>
             <LayoutDashboard size={18} /><span className="nav-copy">Overview</span>
