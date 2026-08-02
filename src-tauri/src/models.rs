@@ -178,6 +178,48 @@ pub struct AddWalletInput {
     pub label: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetWorthEntry {
+    pub date: String,
+    pub net_worth: f64,
+    pub stocks: f64,
+    pub opessocius: f64,
+    pub crypto: f64,
+    pub savings: f64,
+    pub spending: f64,
+    pub receivables: f64,
+    pub cash: f64,
+    pub misc: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveNetWorthInput {
+    pub date: String,
+    pub stocks: f64,
+    pub opessocius: f64,
+    pub crypto: f64,
+    pub savings: f64,
+    pub spending: f64,
+    pub receivables: f64,
+    pub cash: f64,
+    pub misc: f64,
+}
+
+impl SaveNetWorthInput {
+    pub fn net_worth(&self) -> f64 {
+        self.stocks
+            + self.opessocius
+            + self.crypto
+            + self.savings
+            + self.spending
+            + self.receivables
+            + self.cash
+            + self.misc
+    }
+}
+
 #[derive(Debug)]
 pub struct TradingOverview {
     pub total_value: f64,

@@ -13,7 +13,8 @@ use crate::{
     db,
     models::{
         AddWalletInput, CryptoAsset, CryptoPortfolio, Dashboard, HistorySyncState, Holding,
-        MonitoredPortfolio, MonthlyWinnings, PeriodReturn, PortfolioPeriod, SourceSummary,
+        MonitoredPortfolio, MonthlyWinnings, NetWorthEntry, PeriodReturn, PortfolioPeriod,
+        SaveNetWorthInput, SourceSummary,
     },
     providers::{crypto, trading212},
 };
@@ -894,6 +895,40 @@ pub fn add_wallet(state: State<'_, AppState>, input: AddWalletInput) -> Result<i
 pub fn remove_wallet(state: State<'_, AppState>, id: i64) -> Result<(), String> {
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
     db::remove_wallet(&database, id)
+}
+
+#[tauri::command]
+pub fn list_net_worth_entries(state: State<'_, AppState>) -> Result<Vec<NetWorthEntry>, String> {
+    let database = state.database.lock().map_err(|_| "Database lock failed")?;
+    db::list_net_worth_entries(&database)
+}
+
+#[tauri::command]
+pub fn save_net_worth_entry(
+    state: State<'_, AppState>,
+    input: SaveNetWorthInput,
+) -> Result<(), String> {
+    let parsed_date = NaiveDate::parse_from_str(&input.date, "%Y-%m-%d")
+        .map_err(|_| "Net worth date must use YYYY-MM-DD format".to_string())?;
+    if parsed_date.format("%Y-%m-%d").to_string() != input.date {
+        return Err("Net worth date must use YYYY-MM-DD format".to_string());
+    }
+    for (label, amount) in [
+        ("Stocks", input.stocks),
+        ("Opessocius", input.opessocius),
+        ("Crypto", input.crypto),
+        ("Savings", input.savings),
+        ("Spending", input.spending),
+        ("Receivables", input.receivables),
+        ("Cash", input.cash),
+        ("Misc", input.misc),
+    ] {
+        if !amount.is_finite() || amount < 0.0 {
+            return Err(format!("{label} must be a non-negative amount"));
+        }
+    }
+    let database = state.database.lock().map_err(|_| "Database lock failed")?;
+    db::save_net_worth_entry(&database, &input)
 }
 
 #[cfg(test)]

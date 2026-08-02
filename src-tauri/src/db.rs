@@ -4,7 +4,8 @@ use chrono::{Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::models::{
-    CashEvent, CashHistorySummary, CryptoPortfolio, DataPoint, HistorySyncState, Wallet,
+    CashEvent, CashHistorySummary, CryptoPortfolio, DataPoint, HistorySyncState, NetWorthEntry,
+    SaveNetWorthInput, Wallet,
 };
 
 pub fn open(path: &Path) -> Result<Connection, String> {
@@ -71,6 +72,19 @@ fn initialize(connection: &Connection) -> Result<(), String> {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(source, month_start)
+             );
+             CREATE TABLE IF NOT EXISTS net_worth_entries (
+                date TEXT PRIMARY KEY,
+                stocks_eur REAL NOT NULL,
+                opessocius_eur REAL NOT NULL,
+                crypto_eur REAL NOT NULL,
+                savings_eur REAL NOT NULL,
+                spending_eur REAL NOT NULL,
+                receivables_eur REAL NOT NULL,
+                cash_eur REAL NOT NULL,
+                misc_eur REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
              );",
         )
         .map_err(to_string)?;
@@ -99,6 +113,118 @@ fn initialize(connection: &Connection) -> Result<(), String> {
         "ALTER TABLE manual_monthly_winnings ADD COLUMN is_override INTEGER NOT NULL DEFAULT 1",
     )?;
     Ok(())
+}
+
+pub fn import_net_worth_history(
+    connection: &Connection,
+    entries: &[SaveNetWorthInput],
+) -> Result<usize, String> {
+    let mut inserted = 0;
+    for entry in entries {
+        let now = Utc::now().to_rfc3339();
+        inserted += connection
+            .execute(
+                "INSERT OR IGNORE INTO net_worth_entries(
+                    date, stocks_eur, opessocius_eur, crypto_eur, savings_eur, spending_eur,
+                    receivables_eur, cash_eur, misc_eur, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                params![
+                    entry.date,
+                    entry.stocks,
+                    entry.opessocius,
+                    entry.crypto,
+                    entry.savings,
+                    entry.spending,
+                    entry.receivables,
+                    entry.cash,
+                    entry.misc,
+                    now,
+                ],
+            )
+            .map_err(to_string)?;
+    }
+    Ok(inserted)
+}
+
+pub fn save_net_worth_entry(
+    connection: &Connection,
+    entry: &SaveNetWorthInput,
+) -> Result<(), String> {
+    let now = Utc::now().to_rfc3339();
+    connection
+        .execute(
+            "INSERT INTO net_worth_entries(
+                date, stocks_eur, opessocius_eur, crypto_eur, savings_eur, spending_eur,
+                receivables_eur, cash_eur, misc_eur, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+             ON CONFLICT(date) DO UPDATE SET
+                stocks_eur = excluded.stocks_eur,
+                opessocius_eur = excluded.opessocius_eur,
+                crypto_eur = excluded.crypto_eur,
+                savings_eur = excluded.savings_eur,
+                spending_eur = excluded.spending_eur,
+                receivables_eur = excluded.receivables_eur,
+                cash_eur = excluded.cash_eur,
+                misc_eur = excluded.misc_eur,
+                updated_at = excluded.updated_at",
+            params![
+                entry.date,
+                entry.stocks,
+                entry.opessocius,
+                entry.crypto,
+                entry.savings,
+                entry.spending,
+                entry.receivables,
+                entry.cash,
+                entry.misc,
+                now,
+            ],
+        )
+        .map_err(to_string)?;
+    Ok(())
+}
+
+pub fn list_net_worth_entries(connection: &Connection) -> Result<Vec<NetWorthEntry>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT date, stocks_eur, opessocius_eur, crypto_eur, savings_eur, spending_eur,
+                    receivables_eur, cash_eur, misc_eur
+             FROM net_worth_entries ORDER BY date",
+        )
+        .map_err(to_string)?;
+    statement
+        .query_map([], |row| {
+            let stocks = row.get(1)?;
+            let opessocius = row.get(2)?;
+            let crypto = row.get(3)?;
+            let savings = row.get(4)?;
+            let spending = row.get(5)?;
+            let receivables = row.get(6)?;
+            let cash = row.get(7)?;
+            let misc = row.get(8)?;
+            Ok(NetWorthEntry {
+                date: row.get(0)?,
+                net_worth: stocks
+                    + opessocius
+                    + crypto
+                    + savings
+                    + spending
+                    + receivables
+                    + cash
+                    + misc,
+                stocks,
+                opessocius,
+                crypto,
+                savings,
+                spending,
+                receivables,
+                cash,
+                misc,
+            })
+        })
+        .map_err(to_string)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(to_string)
 }
 
 fn add_column_if_missing(connection: &Connection, statement: &str) -> Result<(), String> {
@@ -555,14 +681,47 @@ fn to_string(error: rusqlite::Error) -> String {
 mod tests {
     use rusqlite::Connection;
 
-    use crate::models::CashEvent;
+    use crate::models::{CashEvent, SaveNetWorthInput};
 
     use super::{
         add_wallet, cash_event_count, create_portfolio, ensure_portfolio, history_sync_state,
-        initialize, list_portfolios, monthly_winning, monthly_winnings, save_cash_events,
-        save_history_sync_state, save_monthly_winnings, save_snapshot, simple_return_since,
+        import_net_worth_history, initialize, list_net_worth_entries, list_portfolios,
+        monthly_winning, monthly_winnings, save_cash_events, save_history_sync_state,
+        save_monthly_winnings, save_net_worth_entry, save_snapshot, simple_return_since,
         snapshot_baseline,
     };
+
+    #[test]
+    fn imports_and_updates_net_worth_entries_by_date() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        let mut entry = SaveNetWorthInput {
+            date: "2026-07-27".to_string(),
+            stocks: 10_919.67,
+            opessocius: 8_028.04,
+            crypto: 0.0,
+            savings: 125.0,
+            spending: 217.85,
+            receivables: 1_033.75,
+            cash: 40.0,
+            misc: 0.0,
+        };
+        assert_eq!(
+            import_net_worth_history(&database, &[entry.clone()]).unwrap(),
+            1
+        );
+        assert_eq!(
+            import_net_worth_history(&database, &[entry.clone()]).unwrap(),
+            0
+        );
+
+        entry.crypto = 100.0;
+        save_net_worth_entry(&database, &entry).unwrap();
+        let entries = list_net_worth_entries(&database).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!((entries[0].net_worth - 20_464.31).abs() < 0.001);
+        assert_eq!(entries[0].crypto, 100.0);
+    }
 
     #[test]
     fn stores_grouped_wallets() {

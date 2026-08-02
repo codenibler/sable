@@ -23,6 +23,8 @@ pub fn run() {
             fs::create_dir_all(&data_directory)?;
             let database = db::open(&data_directory.join(&config.database_filename))
                 .map_err(std::io::Error::other)?;
+            db::import_net_worth_history(&database, &config.net_worth_history)
+                .map_err(std::io::Error::other)?;
             let portfolio_id = db::ensure_portfolio(&database).map_err(std::io::Error::other)?;
             import_configured_wallets(&database, portfolio_id, &config)
                 .map_err(std::io::Error::other)?;
@@ -66,6 +68,8 @@ pub fn run() {
             commands::list_crypto_portfolios,
             commands::add_wallet,
             commands::remove_wallet,
+            commands::list_net_worth_entries,
+            commands::save_net_worth_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sable");

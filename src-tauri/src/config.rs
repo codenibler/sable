@@ -5,6 +5,8 @@ use std::{
 
 use chrono::{Datelike, NaiveDate};
 
+use crate::models::SaveNetWorthInput;
+
 #[derive(Clone, Debug)]
 pub struct OpessociusHistoryRow {
     pub month: String,
@@ -52,6 +54,7 @@ pub struct Config {
     pub opessocius_monthly_return_rate: f64,
     pub opessocius_return_start_month: String,
     pub opessocius_history: Vec<OpessociusHistoryRow>,
+    pub net_worth_history: Vec<SaveNetWorthInput>,
     pub configured_bitcoin_xpubs: Vec<String>,
     pub configured_ethereum_addresses: Vec<String>,
     pub configured_solana_addresses: Vec<String>,
@@ -102,6 +105,7 @@ impl Config {
             opessocius_monthly_return_rate: unit_rate("OPESSOCIUS_MONTHLY_RETURN_RATE")?,
             opessocius_return_start_month: month_start("OPESSOCIUS_RETURN_START_MONTH")?,
             opessocius_history: opessocius_history("OPESSOCIUS_HISTORY_FILE", config_directory)?,
+            net_worth_history: net_worth_history("NET_WORTH_HISTORY_FILE", config_directory)?,
             configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
             configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
@@ -197,6 +201,73 @@ fn opessocius_history(
         )
     })?;
     parse_opessocius_history(key, &contents)
+}
+
+fn net_worth_history(
+    key: &str,
+    config_directory: Option<&Path>,
+) -> Result<Vec<SaveNetWorthInput>, String> {
+    let Some(path) = optional(key) else {
+        return Ok(Vec::new());
+    };
+    let resolved_path = resolve_local_path(&path, config_directory);
+    let contents = fs::read_to_string(&resolved_path).map_err(|error| {
+        format!(
+            "Could not read {key} at {}: {error}",
+            resolved_path.display()
+        )
+    })?;
+    parse_net_worth_history(key, &contents)
+}
+
+fn parse_net_worth_history(key: &str, contents: &str) -> Result<Vec<SaveNetWorthInput>, String> {
+    let mut entries = Vec::new();
+    for (index, line) in contents.lines().enumerate().skip(1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields = line.split(',').map(str::trim).collect::<Vec<_>>();
+        if fields.len() != 10 {
+            return Err(format!("{key} row {} must contain 10 columns", index + 1));
+        }
+        let date = NaiveDate::parse_from_str(fields[0], "%Y-%m-%d")
+            .map_err(|_| format!("{key} row {} has an invalid date", index + 1))?
+            .format("%Y-%m-%d")
+            .to_string();
+        let declared_total = non_negative_csv_value(key, "net_worth", fields[1], index + 1)?;
+        let entry = SaveNetWorthInput {
+            date,
+            stocks: non_negative_csv_value(key, "stocks", fields[2], index + 1)?,
+            opessocius: non_negative_csv_value(key, "opessocius", fields[3], index + 1)?,
+            crypto: non_negative_csv_value(key, "crypto", fields[4], index + 1)?,
+            savings: non_negative_csv_value(key, "savings", fields[5], index + 1)?,
+            spending: non_negative_csv_value(key, "spending", fields[6], index + 1)?,
+            receivables: non_negative_csv_value(key, "receivables", fields[7], index + 1)?,
+            cash: non_negative_csv_value(key, "cash", fields[8], index + 1)?,
+            misc: non_negative_csv_value(key, "misc", fields[9], index + 1)?,
+        };
+        if (entry.net_worth() - declared_total).abs() > 0.02 {
+            return Err(format!(
+                "{key} row {} categories do not equal net_worth",
+                index + 1
+            ));
+        }
+        entries.push(entry);
+    }
+    entries.sort_by(|left, right| left.date.cmp(&right.date));
+    if entries.windows(2).any(|pair| pair[0].date == pair[1].date) {
+        return Err(format!("{key} contains duplicate dates"));
+    }
+    Ok(entries)
+}
+
+fn non_negative_csv_value(key: &str, column: &str, value: &str, row: usize) -> Result<f64, String> {
+    let amount = decimal_value(key, column, value, row)?;
+    if amount >= 0.0 {
+        Ok(amount)
+    } else {
+        Err(format!("{key} row {row} has a negative {column}"))
+    }
 }
 
 fn resolve_local_path(configured_path: &str, config_directory: Option<&Path>) -> PathBuf {
@@ -322,7 +393,22 @@ fn ethereum_tokens(key: &str) -> Result<Vec<EthereumTokenConfig>, String> {
 mod tests {
     use std::path::Path;
 
-    use super::{ethereum_tokens, parse_opessocius_history, resolve_local_path};
+    use super::{
+        ethereum_tokens, parse_net_worth_history, parse_opessocius_history, resolve_local_path,
+    };
+
+    #[test]
+    fn parses_private_net_worth_history_and_validates_the_total() {
+        let entries = parse_net_worth_history(
+            "NET_WORTH_HISTORY_FILE",
+            "date,net_worth,stocks,opessocius,crypto,savings,spending,receivables,cash,misc\n\
+             2026-07-27,20364.31,10919.67,8028.04,0,125,217.85,1033.75,40,0\n",
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!((entries[0].net_worth() - 20_364.31).abs() < 0.001);
+        assert_eq!(entries[0].receivables, 1_033.75);
+    }
 
     #[test]
     fn parses_configured_ethereum_tokens() {
