@@ -9,7 +9,7 @@ use rusqlite::Connection;
 use tauri::State;
 
 use crate::{
-    config::Config,
+    config::{self, Config},
     db,
     models::{
         AddWalletInput, CryptoAsset, CryptoPortfolio, Dashboard, HistorySyncState, Holding,
@@ -928,7 +928,8 @@ pub fn save_net_worth_entry(
         }
     }
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
-    db::save_net_worth_entry(&database, &input)
+    db::save_net_worth_entry(&database, &input)?;
+    mirror_net_worth_history(&state, &database)
 }
 
 #[tauri::command]
@@ -936,7 +937,16 @@ pub fn remove_net_worth_entry(state: State<'_, AppState>, date: String) -> Resul
     NaiveDate::parse_from_str(&date, "%Y-%m-%d")
         .map_err(|_| "Net worth date must use YYYY-MM-DD format".to_string())?;
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
-    db::remove_net_worth_entry(&database, &date)
+    db::remove_net_worth_entry(&database, &date)?;
+    mirror_net_worth_history(&state, &database)
+}
+
+fn mirror_net_worth_history(state: &AppState, database: &Connection) -> Result<(), String> {
+    let Some(path) = &state.config.net_worth_history_path else {
+        return Ok(());
+    };
+    let entries = db::list_net_worth_entries(database)?;
+    config::write_net_worth_history(path, &entries)
 }
 
 #[cfg(test)]

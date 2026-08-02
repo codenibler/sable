@@ -1,11 +1,13 @@
 use std::{
-    env, fs,
+    env,
+    fmt::Write as _,
+    fs,
     path::{Path, PathBuf},
 };
 
 use chrono::{Datelike, NaiveDate};
 
-use crate::models::SaveNetWorthInput;
+use crate::models::{NetWorthEntry, SaveNetWorthInput};
 
 #[derive(Clone, Debug)]
 pub struct OpessociusHistoryRow {
@@ -41,6 +43,7 @@ pub struct Config {
     pub snapshot_interval_minutes: i64,
     pub http_timeout_seconds: u64,
     pub database_filename: String,
+    pub database_backup_count: usize,
     pub trading212_history_max_pages: usize,
     pub history_sync_interval_minutes: i64,
     pub history_backfill_retry_seconds: u64,
@@ -55,6 +58,7 @@ pub struct Config {
     pub opessocius_return_start_month: String,
     pub opessocius_history: Vec<OpessociusHistoryRow>,
     pub net_worth_history: Vec<SaveNetWorthInput>,
+    pub net_worth_history_path: Option<PathBuf>,
     pub configured_bitcoin_xpubs: Vec<String>,
     pub configured_ethereum_addresses: Vec<String>,
     pub configured_solana_addresses: Vec<String>,
@@ -64,6 +68,8 @@ impl Config {
     pub fn load() -> Result<Self, String> {
         let dotenv_path = load_dotenv();
         let config_directory = dotenv_path.as_deref().and_then(Path::parent);
+        let (net_worth_history_path, net_worth_history) =
+            net_worth_history("NET_WORTH_HISTORY_FILE", config_directory)?;
 
         Ok(Self {
             trading212_api_key: optional("TRADING212_API_KEY"),
@@ -83,6 +89,7 @@ impl Config {
                 .parse()
                 .map_err(|_| "HTTP_TIMEOUT_SECONDS must be a whole number".to_string())?,
             database_filename: required("DATABASE_FILENAME")?,
+            database_backup_count: whole_number("DATABASE_BACKUP_COUNT")?.clamp(1, 30),
             trading212_history_max_pages: required("TRADING212_HISTORY_MAX_PAGES")?
                 .parse::<usize>()
                 .map_err(|_| "TRADING212_HISTORY_MAX_PAGES must be a whole number".to_string())?
@@ -105,7 +112,8 @@ impl Config {
             opessocius_monthly_return_rate: unit_rate("OPESSOCIUS_MONTHLY_RETURN_RATE")?,
             opessocius_return_start_month: month_start("OPESSOCIUS_RETURN_START_MONTH")?,
             opessocius_history: opessocius_history("OPESSOCIUS_HISTORY_FILE", config_directory)?,
-            net_worth_history: net_worth_history("NET_WORTH_HISTORY_FILE", config_directory)?,
+            net_worth_history,
+            net_worth_history_path,
             configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
             configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
@@ -120,10 +128,12 @@ impl Config {
 fn load_dotenv() -> Option<PathBuf> {
     if let Some(path) = env::var_os("SABLE_ENV_FILE").map(PathBuf::from) {
         if dotenvy::from_path(&path).is_ok() {
+            let _ = harden_private_file(&path);
             return Some(path);
         }
     }
     if let Ok(path) = dotenvy::dotenv() {
+        let _ = harden_private_file(&path);
         return Some(path);
     }
     let Ok(executable) = env::current_exe() else {
@@ -135,7 +145,10 @@ fn load_dotenv() -> Option<PathBuf> {
         .map(|directory| directory.join(".env"))
         .find(|candidate| candidate.is_file())
     {
-        return dotenvy::from_path(&path).ok().map(|_| path);
+        if dotenvy::from_path(&path).is_ok() {
+            let _ = harden_private_file(&path);
+            return Some(path);
+        }
     }
     None
 }
@@ -194,6 +207,7 @@ fn opessocius_history(
         return Ok(Vec::new());
     };
     let resolved_path = resolve_local_path(&path, config_directory);
+    harden_private_file(&resolved_path)?;
     let contents = fs::read_to_string(&resolved_path).map_err(|error| {
         format!(
             "Could not read {key} at {}: {error}",
@@ -206,18 +220,80 @@ fn opessocius_history(
 fn net_worth_history(
     key: &str,
     config_directory: Option<&Path>,
-) -> Result<Vec<SaveNetWorthInput>, String> {
+) -> Result<(Option<PathBuf>, Vec<SaveNetWorthInput>), String> {
     let Some(path) = optional(key) else {
-        return Ok(Vec::new());
+        return Ok((None, Vec::new()));
     };
     let resolved_path = resolve_local_path(&path, config_directory);
+    harden_private_file(&resolved_path)?;
     let contents = fs::read_to_string(&resolved_path).map_err(|error| {
         format!(
             "Could not read {key} at {}: {error}",
             resolved_path.display()
         )
     })?;
-    parse_net_worth_history(key, &contents)
+    Ok((
+        Some(resolved_path),
+        parse_net_worth_history(key, &contents)?,
+    ))
+}
+
+pub fn write_net_worth_history(path: &Path, entries: &[NetWorthEntry]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Could not prepare private net worth history: {error}"))?;
+    }
+    let mut contents = String::from(
+        "date,net_worth,stocks,opessocius,crypto,savings,spending,receivables,cash,misc\n",
+    );
+    for entry in entries {
+        writeln!(
+            contents,
+            "{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2}",
+            entry.date,
+            entry.net_worth,
+            entry.stocks,
+            entry.opessocius,
+            entry.crypto,
+            entry.savings,
+            entry.spending,
+            entry.receivables,
+            entry.cash,
+            entry.misc,
+        )
+        .map_err(|error| format!("Could not format private net worth history: {error}"))?;
+    }
+    let temporary_path = path.with_extension("csv.tmp");
+    fs::write(&temporary_path, contents)
+        .map_err(|error| format!("Could not update private net worth history: {error}"))?;
+    harden_private_file(&temporary_path)?;
+    fs::rename(&temporary_path, path)
+        .map_err(|error| format!("Could not replace private net worth history: {error}"))?;
+    harden_private_file(path)
+}
+
+#[cfg(unix)]
+pub(crate) fn harden_private_file(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("Could not inspect private file {}: {error}", path.display()))?;
+    let mut permissions = metadata.permissions();
+    if permissions.mode() & 0o077 != 0 {
+        permissions.set_mode(0o600);
+        fs::set_permissions(path, permissions).map_err(|error| {
+            format!(
+                "Could not restrict private file {} to its owner: {error}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn harden_private_file(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 fn parse_net_worth_history(key: &str, contents: &str) -> Result<Vec<SaveNetWorthInput>, String> {

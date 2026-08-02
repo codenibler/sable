@@ -1,7 +1,10 @@
-use std::path::Path;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use chrono::{Duration, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, MAIN_DB, OptionalExtension, params};
 
 use crate::models::{
     CashEvent, CashHistorySummary, CryptoPortfolio, DataPoint, HistorySyncState, NetWorthEntry,
@@ -12,6 +15,38 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     let connection = Connection::open(path).map_err(to_string)?;
     initialize(&connection)?;
     Ok(connection)
+}
+
+pub fn backup_database(
+    connection: &Connection,
+    directory: &Path,
+    retain: usize,
+) -> Result<PathBuf, String> {
+    fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    let timestamp = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| Utc::now().timestamp_millis() * 1_000_000);
+    let backup_path = directory.join(format!("sable-backup-{timestamp}.sqlite3"));
+    connection
+        .backup(MAIN_DB, &backup_path, None)
+        .map_err(to_string)?;
+
+    let mut backups = fs::read_dir(directory)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("sable-backup-") && name.ends_with(".sqlite3"))
+        })
+        .collect::<Vec<_>>();
+    backups.sort();
+    let remove_count = backups.len().saturating_sub(retain);
+    for obsolete in backups.into_iter().take(remove_count) {
+        fs::remove_file(obsolete).map_err(|error| error.to_string())?;
+    }
+    Ok(backup_path)
 }
 
 fn initialize(connection: &Connection) -> Result<(), String> {

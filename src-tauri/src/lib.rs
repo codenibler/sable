@@ -21,10 +21,23 @@ pub fn run() {
             let history_backfill_retry_seconds = config.history_backfill_retry_seconds;
             let data_directory = app.path().app_data_dir()?;
             fs::create_dir_all(&data_directory)?;
-            let database = db::open(&data_directory.join(&config.database_filename))
-                .map_err(std::io::Error::other)?;
+            let database_path = data_directory.join(&config.database_filename);
+            let database = db::open(&database_path).map_err(std::io::Error::other)?;
+            config::harden_private_file(&database_path).map_err(std::io::Error::other)?;
             db::import_net_worth_history(&database, &config.net_worth_history)
                 .map_err(std::io::Error::other)?;
+            if let Some(path) = &config.net_worth_history_path {
+                let entries =
+                    db::list_net_worth_entries(&database).map_err(std::io::Error::other)?;
+                config::write_net_worth_history(path, &entries).map_err(std::io::Error::other)?;
+            }
+            let backup_path = db::backup_database(
+                &database,
+                &data_directory.join("backups"),
+                config.database_backup_count,
+            )
+            .map_err(std::io::Error::other)?;
+            config::harden_private_file(&backup_path).map_err(std::io::Error::other)?;
             let portfolio_id = db::ensure_portfolio(&database).map_err(std::io::Error::other)?;
             import_configured_wallets(&database, portfolio_id, &config)
                 .map_err(std::io::Error::other)?;
