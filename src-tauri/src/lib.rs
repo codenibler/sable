@@ -31,6 +31,14 @@ pub fn run() {
                     db::list_net_worth_entries(&database).map_err(std::io::Error::other)?;
                 config::write_net_worth_history(path, &entries).map_err(std::io::Error::other)?;
             }
+            let net_worth_entries =
+                db::list_net_worth_entries(&database).map_err(std::io::Error::other)?;
+            config::backup_net_worth_history(
+                &config.net_worth_backup_directory,
+                &net_worth_entries,
+                config.net_worth_backup_interval_days,
+            )
+            .map_err(std::io::Error::other)?;
             let backup_path = db::backup_database(
                 &database,
                 &data_directory.join("backups"),

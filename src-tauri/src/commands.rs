@@ -943,11 +943,16 @@ pub fn remove_net_worth_entry(state: State<'_, AppState>, date: String) -> Resul
 }
 
 fn mirror_net_worth_history(state: &AppState, database: &Connection) -> Result<(), String> {
-    let Some(path) = &state.config.net_worth_history_path else {
-        return Ok(());
-    };
     let entries = db::list_net_worth_entries(database)?;
-    config::write_net_worth_history(path, &entries)
+    if let Some(path) = &state.config.net_worth_history_path {
+        config::write_net_worth_history(path, &entries)?;
+    }
+    config::backup_net_worth_history(
+        &state.config.net_worth_backup_directory,
+        &entries,
+        state.config.net_worth_backup_interval_days,
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

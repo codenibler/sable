@@ -3,9 +3,10 @@ use std::{
     fmt::Write as _,
     fs,
     path::{Path, PathBuf},
+    time::{Duration as StdDuration, SystemTime},
 };
 
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate};
 
 use crate::models::{NetWorthEntry, SaveNetWorthInput};
 
@@ -59,6 +60,8 @@ pub struct Config {
     pub opessocius_history: Vec<OpessociusHistoryRow>,
     pub net_worth_history: Vec<SaveNetWorthInput>,
     pub net_worth_history_path: Option<PathBuf>,
+    pub net_worth_backup_directory: PathBuf,
+    pub net_worth_backup_interval_days: u64,
     pub configured_bitcoin_xpubs: Vec<String>,
     pub configured_ethereum_addresses: Vec<String>,
     pub configured_solana_addresses: Vec<String>,
@@ -114,6 +117,9 @@ impl Config {
             opessocius_history: opessocius_history("OPESSOCIUS_HISTORY_FILE", config_directory)?,
             net_worth_history,
             net_worth_history_path,
+            net_worth_backup_directory: PathBuf::from(required("NET_WORTH_BACKUP_DIRECTORY")?),
+            net_worth_backup_interval_days: whole_number("NET_WORTH_BACKUP_INTERVAL_DAYS")?
+                .clamp(1, 365) as u64,
             configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
             configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
@@ -271,6 +277,40 @@ pub fn write_net_worth_history(path: &Path, entries: &[NetWorthEntry]) -> Result
     harden_private_file(path)
 }
 
+pub fn backup_net_worth_history(
+    directory: &Path,
+    entries: &[NetWorthEntry],
+    interval_days: u64,
+) -> Result<Option<PathBuf>, String> {
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("Could not prepare net worth backup directory: {error}"))?;
+    harden_private_directory(directory)?;
+
+    let interval = StdDuration::from_secs(interval_days.max(1).saturating_mul(86_400));
+    let now = SystemTime::now();
+    let has_recent_backup = fs::read_dir(directory)
+        .map_err(|error| format!("Could not inspect net worth backups: {error}"))?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("net-worth-") && name.ends_with(".csv"))
+        })
+        .filter_map(|entry| entry.metadata().ok()?.modified().ok())
+        .any(|modified| {
+            now.duration_since(modified)
+                .map_or(true, |age| age < interval)
+        });
+    if has_recent_backup {
+        return Ok(None);
+    }
+
+    let path = directory.join(format!("net-worth-{}.csv", Local::now().format("%Y-%m-%d")));
+    write_net_worth_history(&path, entries)?;
+    Ok(Some(path))
+}
+
 #[cfg(unix)]
 pub(crate) fn harden_private_file(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
@@ -290,8 +330,36 @@ pub(crate) fn harden_private_file(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn harden_private_directory(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::metadata(path).map_err(|error| {
+        format!(
+            "Could not inspect private directory {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut permissions = metadata.permissions();
+    if permissions.mode() & 0o077 != 0 {
+        permissions.set_mode(0o700);
+        fs::set_permissions(path, permissions).map_err(|error| {
+            format!(
+                "Could not restrict private directory {} to its owner: {error}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(not(unix))]
 pub(crate) fn harden_private_file(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden_private_directory(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
@@ -466,11 +534,47 @@ fn ethereum_tokens(key: &str) -> Result<Vec<EthereumTokenConfig>, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{fs, path::Path, time::SystemTime};
 
     use super::{
-        ethereum_tokens, parse_net_worth_history, parse_opessocius_history, resolve_local_path,
+        backup_net_worth_history, ethereum_tokens, parse_net_worth_history,
+        parse_opessocius_history, resolve_local_path,
     };
+    use crate::models::NetWorthEntry;
+
+    #[test]
+    fn writes_at_most_one_net_worth_backup_per_interval() {
+        let suffix = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("sable-net-worth-backup-{suffix}"));
+        let entry = NetWorthEntry {
+            date: "2026-07-27".to_string(),
+            net_worth: 20_364.31,
+            stocks: 10_919.67,
+            opessocius: 8_028.04,
+            crypto: 0.0,
+            savings: 125.0,
+            spending: 217.85,
+            receivables: 1_033.75,
+            cash: 40.0,
+            misc: 0.0,
+        };
+
+        let backup = backup_net_worth_history(&directory, &[entry], 7)
+            .unwrap()
+            .expect("first backup");
+        assert!(backup.is_file());
+        assert!(fs::read_to_string(backup).unwrap().contains("2026-07-27"));
+        assert!(
+            backup_net_worth_history(&directory, &[], 7)
+                .unwrap()
+                .is_none()
+        );
+
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn parses_private_net_worth_history_and_validates_the_total() {
