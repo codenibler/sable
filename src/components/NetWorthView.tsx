@@ -27,6 +27,13 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
 
   const analytics = useMemo(() => calculateAnalytics(entries), [entries]);
   const selected = entries.find((entry) => entry.date === selectedDate) ?? entries.at(-1);
+  const chartColumns = entries.map((_, index) => {
+    const recency = (index + 1) / entries.length;
+    const weight = 0.12 + 0.88 * Math.pow(recency, 1.8);
+    return `minmax(2px, ${weight.toFixed(3)}fr)`;
+  }).join(" ");
+  const chartGap = entries.length > 40 ? 1 : entries.length > 24 ? 2 : entries.length > 16 ? 4 : 8;
+  const chartLabelInterval = Math.max(1, Math.ceil(entries.length / 9));
 
   const remove = async (entry: NetWorthEntry) => {
     if (!window.confirm(`Remove the net worth snapshot from ${formatDate(entry.date)}?`)) return;
@@ -61,16 +68,17 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
     <section className="panel net-worth-chart-panel">
       <div className="panel-heading"><div><p className="section-label">Progression</p><h2>Net worth by date</h2></div><div className="chart-focus"><strong>{formatMoney(selected?.netWorth ?? 0)}</strong><small>{selected ? formatDate(selected.date) : ""}</small></div></div>
       <div className="net-worth-chart-scroll">
-        <div className="net-worth-bars" style={{ gridTemplateColumns: `repeat(${entries.length}, minmax(42px, 1fr))` }}>
+        <div className="net-worth-bars" style={{ gridTemplateColumns: chartColumns, columnGap: `${chartGap}px` }}>
           {entries.map((entry, index) => {
             const previous = entries[index - 1];
             const change = previous ? entry.netWorth - previous.netWorth : 0;
             const height = Math.max((entry.netWorth / analytics.high.netWorth) * 100, 3);
             const isHigh = entry.date === analytics.high.date;
+            const showLabel = index === 0 || index === entries.length - 1 || index % chartLabelInterval === 0;
             return <button className={`net-worth-bar-column ${selected?.date === entry.date ? "selected" : ""}`} key={entry.date} onClick={() => setSelectedDate(entry.date)} title={`${formatDate(entry.date)} · ${formatMoney(entry.netWorth)}`}>
               <span className={change >= 0 ? "bar-change positive-text" : "bar-change negative-text"}>{index ? `${change >= 0 ? "+" : ""}${Math.round(change).toLocaleString()}` : "Start"}</span>
               <span className={`net-worth-bar ${isHigh ? "ath" : ""}`} style={{ height: `${height}%` }}>{isHigh && <Trophy size={12} />}</span>
-              <small>{formatDate(entry.date, { month: "short", year: "2-digit" })}</small>
+              <small>{showLabel ? formatDate(entry.date, { month: "short", year: "2-digit" }) : ""}</small>
             </button>;
           })}
         </div>
