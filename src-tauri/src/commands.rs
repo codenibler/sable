@@ -446,6 +446,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                 &state.config.ethereum_tokens,
                 state.config.snapshot_interval_minutes,
             );
+            normalize_crypto_invested_history(&mut portfolio_history, invested);
             if let Some(started_at) = portfolio_history
                 .first()
                 .map(|point| point.timestamp.clone())
@@ -635,6 +636,12 @@ fn is_configured_token(asset: &CryptoAsset, tokens: &[EthereumTokenConfig]) -> b
     tokens
         .iter()
         .any(|token| token.symbol.eq_ignore_ascii_case(&asset.symbol))
+}
+
+fn normalize_crypto_invested_history(history: &mut [crate::models::DataPoint], invested: f64) {
+    for point in history {
+        point.invested = invested;
+    }
 }
 
 fn extend_asset_history_to(history: &mut Vec<crate::models::DataPoint>, started_at: &str) {
@@ -1048,7 +1055,7 @@ mod tests {
         accrued_monthly_winnings, crypto_portfolio_baseline, distributed_winnings,
         extend_asset_history_to, grouped_crypto_assets,
         include_configured_tokens_from_portfolio_start, month_bounds,
-        planned_default_monthly_returns, return_month,
+        normalize_crypto_invested_history, planned_default_monthly_returns, return_month,
     };
     use crate::{
         config::EthereumTokenConfig,
@@ -1247,7 +1254,7 @@ mod tests {
             DataPoint {
                 timestamp: same_capture_timestamp.to_string(),
                 value: 320.0,
-                invested: 320.0,
+                invested: 200.0,
                 opessocius_winnings: 0.0,
             },
             DataPoint {
@@ -1265,9 +1272,11 @@ mod tests {
             &tokens,
             60,
         );
+        normalize_crypto_invested_history(&mut combined_history, 320.0);
         assert_eq!(combined_history[0].value, 320.0);
         assert_eq!(combined_history[0].invested, 320.0);
         assert_eq!(combined_history[1].value, 320.0);
+        assert_eq!(combined_history[1].invested, 320.0);
         assert_eq!(combined_history[2].value, 320.0);
         assert_eq!(
             combined_history
