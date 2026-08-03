@@ -14,14 +14,25 @@ function cutoffFor(period: Period) {
 }
 
 function pathFor(values: number[], width: number, height: number, min: number, max: number) {
-  const spread = Math.max(max - min, Math.max(max * 0.02, 1));
+  const [domainMin, domainMax] = domainFor(min, max);
+  const spread = domainMax - domainMin;
   return values
     .map((value, index) => {
       const x = values.length === 1 ? width : (index / (values.length - 1)) * width;
-      const y = height - ((value - min + spread * 0.08) / (spread * 1.16)) * height;
+      const y = height - ((value - domainMin) / spread) * height;
       return `${index === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
     })
     .join(" ");
+}
+
+function spreadFor(min: number, max: number) {
+  return Math.max(max - min, Math.max(max * 0.02, 1));
+}
+
+function domainFor(min: number, max: number) {
+  const spread = spreadFor(min, max) * 1.16;
+  const midpoint = (min + max) / 2;
+  return [Math.max(0, midpoint - spread / 2), Math.max(midpoint + spread / 2, 1)] as const;
 }
 
 type PerformanceChartProps = {
@@ -49,6 +60,10 @@ export function PerformanceChart({
   const chartValues = points.flatMap((point) => [point.value, point.invested]);
   const min = Math.min(...chartValues);
   const max = Math.max(...chartValues);
+  const [domainMin, domainMax] = domainFor(min, max);
+  const yAxisValues = [1, 0.75, 0.5, 0.25, 0].map(
+    (position) => domainMin + position * (domainMax - domainMin),
+  );
   const line = points.length > 1 ? pathFor(points.map((point) => point.value), 1000, 250, min, max) : "";
   const invested = points.length > 1 ? pathFor(points.map((point) => point.invested), 1000, 250, min, max) : "";
 
@@ -82,9 +97,11 @@ export function PerformanceChart({
             <path className="equity-area" d={`${line} L1000,250 L0,250 Z`} />
             <path className="equity-line" d={line} />
           </svg>
-          <div className="chart-axis">
+          <div className="chart-y-axis" aria-hidden="true">
+            {yAxisValues.map((value, index) => <span key={index} style={{ top: `${index * 25}%` }}>{format(value)}</span>)}
+          </div>
+          <div className="chart-x-axis">
             <span>{new Date(points[0].timestamp).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>
-            <span>{format(points.at(-1)?.value ?? 0)}</span>
             <span>{new Date(points.at(-1)!.timestamp).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>
           </div>
         </div>
