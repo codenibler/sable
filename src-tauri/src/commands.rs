@@ -9,7 +9,7 @@ use rusqlite::Connection;
 use tauri::State;
 
 use crate::{
-    config::{self, Config},
+    config::{self, Config, EthereumTokenConfig},
     db,
     models::{
         AddWalletInput, CryptoAsset, CryptoPortfolio, Dashboard, HistorySyncState, Holding,
@@ -227,8 +227,9 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
         for portfolio in &mut portfolios {
             portfolio.value = portfolio.wallets.iter().map(|wallet| wallet.value).sum();
-            let baseline = db::snapshot_baseline(&database, "portfolio", portfolio.id)?
-                .unwrap_or(portfolio.value);
+            portfolio.assets =
+                crypto_assets(&database, portfolio, state.config.snapshot_interval_minutes)?;
+            let baseline = crypto_portfolio_baseline(portfolio);
             portfolio.return_value = portfolio.value - baseline;
             db::save_snapshot(
                 &database,
@@ -239,8 +240,6 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                 0.0,
                 state.config.snapshot_interval_minutes,
             )?;
-            portfolio.assets =
-                crypto_assets(&database, portfolio, state.config.snapshot_interval_minutes)?;
             crypto_value += portfolio.value;
             crypto_invested += baseline;
             crypto_return += portfolio.return_value;
@@ -383,6 +382,11 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         let accrued = accrued_winnings(&opessocius_winnings, timestamp)?;
         point.value = point.value - point.opessocius_winnings + accrued;
     }
+    include_configured_tokens_from_portfolio_start(
+        &mut history,
+        &portfolios,
+        &state.config.ethereum_tokens,
+    );
 
     let (opessocius_history, opessocius_periods) =
         opessocius_portfolio_history(&state.config, &opessocius_winnings)?;
@@ -432,8 +436,26 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     ];
     {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
-        for portfolio in &portfolios {
+        for portfolio in &mut portfolios {
             let invested = portfolio.value - portfolio.return_value;
+            let mut portfolio_history = db::source_history(&database, "portfolio", portfolio.id)?;
+            include_configured_tokens_from_portfolio_start(
+                &mut portfolio_history,
+                std::slice::from_ref(portfolio),
+                &state.config.ethereum_tokens,
+            );
+            if let Some(started_at) = portfolio_history
+                .first()
+                .map(|point| point.timestamp.clone())
+            {
+                for asset in portfolio
+                    .assets
+                    .iter_mut()
+                    .filter(|asset| is_configured_token(asset, &state.config.ethereum_tokens))
+                {
+                    extend_asset_history_to(&mut asset.history, &started_at);
+                }
+            }
             monitored_portfolios.push(MonitoredPortfolio {
                 id: format!("portfolio-{}", portfolio.id),
                 name: portfolio.name.clone(),
@@ -442,7 +464,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                 invested_value: invested,
                 total_return: portfolio.return_value,
                 return_percent: percent_of(portfolio.return_value, invested),
-                history: db::source_history(&database, "portfolio", portfolio.id)?,
+                history: portfolio_history,
                 periods: Vec::new(),
                 item_count: portfolio.wallets.len(),
                 item_label: "wallets".to_string(),
@@ -492,6 +514,14 @@ fn percent_of(amount: f64, basis: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+fn crypto_portfolio_baseline(portfolio: &CryptoPortfolio) -> f64 {
+    portfolio
+        .assets
+        .iter()
+        .map(|asset| asset.invested_value)
+        .sum()
 }
 
 fn crypto_assets(
@@ -566,6 +596,53 @@ fn grouped_crypto_assets(portfolio: &CryptoPortfolio) -> GroupedCryptoAssets {
         }
     }
     grouped
+}
+
+fn include_configured_tokens_from_portfolio_start(
+    history: &mut [crate::models::DataPoint],
+    portfolios: &[CryptoPortfolio],
+    tokens: &[EthereumTokenConfig],
+) {
+    for asset in portfolios
+        .iter()
+        .flat_map(|portfolio| &portfolio.assets)
+        .filter(|asset| is_configured_token(asset, tokens))
+    {
+        let Some(first_asset_point) = asset.history.first() else {
+            continue;
+        };
+        for point in history
+            .iter_mut()
+            .filter(|point| point.timestamp.as_str() < first_asset_point.timestamp.as_str())
+        {
+            point.value += first_asset_point.value;
+            point.invested += first_asset_point.invested;
+        }
+    }
+}
+
+fn is_configured_token(asset: &CryptoAsset, tokens: &[EthereumTokenConfig]) -> bool {
+    tokens
+        .iter()
+        .any(|token| token.symbol.eq_ignore_ascii_case(&asset.symbol))
+}
+
+fn extend_asset_history_to(history: &mut Vec<crate::models::DataPoint>, started_at: &str) {
+    let Some(first_point) = history.first() else {
+        return;
+    };
+    if started_at >= first_point.timestamp.as_str() {
+        return;
+    }
+    history.insert(
+        0,
+        crate::models::DataPoint {
+            timestamp: started_at.to_string(),
+            value: first_point.value,
+            invested: first_point.invested,
+            opessocius_winnings: 0.0,
+        },
+    );
 }
 
 fn opessocius_portfolio_history(
@@ -958,10 +1035,15 @@ fn mirror_net_worth_history(state: &AppState, database: &Connection) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::{
-        accrued_monthly_winnings, distributed_winnings, grouped_crypto_assets, month_bounds,
+        accrued_monthly_winnings, crypto_portfolio_baseline, distributed_winnings,
+        extend_asset_history_to, grouped_crypto_assets,
+        include_configured_tokens_from_portfolio_start, month_bounds,
         planned_default_monthly_returns, return_month,
     };
-    use crate::models::{CryptoPortfolio, Wallet, WalletAsset};
+    use crate::{
+        config::EthereumTokenConfig,
+        models::{CryptoAsset, CryptoPortfolio, DataPoint, Wallet, WalletAsset},
+    };
     use chrono::{Local, TimeZone};
 
     #[test]
@@ -1088,5 +1170,91 @@ mod tests {
         assert_eq!(grouped["eth"].4, 200.0);
         assert_eq!(grouped["link"].3, 10.0);
         assert_eq!(grouped["link"].4, 120.0);
+    }
+
+    #[test]
+    fn treats_configured_tokens_as_part_of_the_original_crypto_basis() {
+        let first_timestamp = "2026-07-01T00:00:00+00:00";
+        let detected_timestamp = "2026-08-01T00:00:00+00:00";
+        let link = CryptoAsset {
+            id: "link".to_string(),
+            network: "eth".to_string(),
+            symbol: "LINK".to_string(),
+            name: "Chainlink".to_string(),
+            balance: 10.0,
+            value: 120.0,
+            invested_value: 120.0,
+            total_return: 0.0,
+            return_percent: 0.0,
+            allocation: 37.5,
+            wallet_count: 1,
+            history: vec![DataPoint {
+                timestamp: detected_timestamp.to_string(),
+                value: 120.0,
+                invested: 120.0,
+                opessocius_winnings: 0.0,
+            }],
+        };
+        let portfolio = CryptoPortfolio {
+            id: 1,
+            name: "Trezor Safe".to_string(),
+            value: 320.0,
+            return_value: 0.0,
+            assets: vec![
+                CryptoAsset {
+                    id: "eth".to_string(),
+                    network: "eth".to_string(),
+                    symbol: "ETH".to_string(),
+                    name: "Ethereum".to_string(),
+                    balance: 2.0,
+                    value: 200.0,
+                    invested_value: 200.0,
+                    total_return: 0.0,
+                    return_percent: 0.0,
+                    allocation: 62.5,
+                    wallet_count: 1,
+                    history: Vec::new(),
+                },
+                link.clone(),
+            ],
+            wallets: Vec::new(),
+        };
+        let tokens = vec![EthereumTokenConfig {
+            price_id: "chainlink".to_string(),
+            symbol: "LINK".to_string(),
+            name: "Chainlink".to_string(),
+            contract_address: "0x514910771AF9Ca656af840dff83E8264EcF986CA".to_string(),
+            decimals: 18,
+        }];
+        let mut combined_history = vec![
+            DataPoint {
+                timestamp: first_timestamp.to_string(),
+                value: 200.0,
+                invested: 200.0,
+                opessocius_winnings: 0.0,
+            },
+            DataPoint {
+                timestamp: detected_timestamp.to_string(),
+                value: 320.0,
+                invested: 320.0,
+                opessocius_winnings: 0.0,
+            },
+        ];
+
+        assert_eq!(crypto_portfolio_baseline(&portfolio), 320.0);
+        include_configured_tokens_from_portfolio_start(
+            &mut combined_history,
+            std::slice::from_ref(&portfolio),
+            &tokens,
+        );
+        assert_eq!(combined_history[0].value, 320.0);
+        assert_eq!(combined_history[0].invested, 320.0);
+        assert_eq!(combined_history[1].value, 320.0);
+
+        let mut link_history = link.history;
+        extend_asset_history_to(&mut link_history, first_timestamp);
+        assert_eq!(link_history[0].timestamp, first_timestamp);
+        assert_eq!(link_history[0].value, 120.0);
+        assert_eq!(link_history[1].timestamp, detected_timestamp);
     }
 }
