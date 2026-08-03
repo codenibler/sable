@@ -88,6 +88,10 @@ function App() {
     }
   }, []);
 
+  const refreshNetWorthAndDashboard = useCallback(async () => {
+    await Promise.all([refreshNetWorth(), refresh()]);
+  }, [refresh, refreshNetWorth]);
+
   useEffect(() => {
     void refresh();
     void refreshNetWorth();
@@ -194,8 +198,8 @@ function App() {
             {view === "net-worth" ? netWorthEntries.length > 0 && <p className="updated" data-tauri-drag-region>Latest snapshot {new Date(`${netWorthEntries.at(-1)!.date}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</p> : dashboard && <p className="updated" data-tauri-drag-region>Updated {new Date(dashboard.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>}
           </div>
           <div className="topbar-actions">
-            <button className="icon-button" onClick={() => void (view === "net-worth" ? refreshNetWorth() : refresh())} disabled={view === "net-worth" ? netWorthLoading : loading} aria-label="Refresh portfolio" title="Refresh now">
-              <RefreshCw size={18} className={(view === "net-worth" ? netWorthLoading : loading) ? "spin" : ""} />
+            <button className="icon-button" onClick={() => void (view === "net-worth" ? refreshNetWorthAndDashboard() : refresh())} disabled={view === "net-worth" ? netWorthLoading || loading : loading} aria-label="Refresh portfolio" title="Refresh now">
+              <RefreshCw size={18} className={(view === "net-worth" ? netWorthLoading || loading : loading) ? "spin" : ""} />
             </button>
             {(view === "wallets" || selectedCryptoPortfolio) && <button className="primary-button" onClick={() => setWalletModal(true)} disabled={!dashboard?.portfolios.length}><Plus size={17} /> Add wallet</button>}
             <WindowControls />
@@ -207,7 +211,7 @@ function App() {
         )}
         {view === "net-worth" && netWorthError && <div className="error-banner"><CircleAlert size={18} /><div><strong>Could not load net worth</strong><p>{netWorthError}</p></div></div>}
 
-        {view === "net-worth" ? netWorthLoading && !netWorthEntries.length ? <Loading /> : <NetWorthView entries={netWorthEntries} formatMoney={formatMoney} onChanged={refreshNetWorth} /> : !dashboard && loading ? <Loading /> : dashboard && view === "overview" ? (
+        {view === "net-worth" ? netWorthLoading && !netWorthEntries.length ? <Loading /> : <NetWorthView entries={netWorthEntries} formatMoney={formatMoney} onChanged={refreshNetWorthAndDashboard} /> : !dashboard && loading ? <Loading /> : dashboard && view === "overview" ? (
           <Overview dashboard={dashboard} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} onAddWinnings={() => setWinningsModal(true)} />
         ) : dashboard && selectedPortfolio && selectedCryptoPortfolio ? (
           <CryptoPortfolioDetailView portfolio={selectedCryptoPortfolio} monitored={selectedPortfolio} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} />
@@ -318,13 +322,13 @@ function PortfolioDetailView({ portfolio, formatMoney, formatWholeMoney, onEditR
         <p className="metric-label">Current equity</p>
         <p className="balance">{formatMoney(portfolio.value)}</p>
         <span className={positive ? "change positive" : "change negative"}>{positive ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}{portfolio.returnPercent.toFixed(2)}% · {formatMoney(portfolio.totalReturn)}</span>
-        <small className="return-method">{portfolio.connected ? "Portfolio connected" : "Showing last available history"}</small>
+        <small className="return-method">{portfolio.connected ? portfolio.id === "trading212" ? "Net Worth history · live account connected" : "Portfolio connected" : "Showing last available history"}</small>
       </div>
       <Metric label="Invested" value={formatMoney(portfolio.investedValue)} />
       <Metric label="Total return" value={`${portfolio.returnPercent.toFixed(2)}%`} helper={formatMoney(portfolio.totalReturn)} valueClassName={positive ? "positive-text" : "negative-text"} />
       <Metric label={latestPeriod ? "Latest month" : portfolio.itemLabel} value={latestPeriod ? `${latestPeriod.returnPercent.toFixed(2)}%` : String(portfolio.itemCount)} helper={latestPeriod ? formatMoney(latestPeriod.returnValue) : `${portfolio.itemCount} ${portfolio.itemLabel}`} valueClassName={latestPeriod ? latestPeriod.returnValue >= 0 ? "positive-text" : "negative-text" : undefined} />
     </section>
-    <PerformanceChart history={portfolio.history} format={formatMoney} formatAxis={formatWholeMoney} />
+    <PerformanceChart history={portfolio.history} format={formatMoney} formatAxis={formatWholeMoney} valueLabel={portfolio.id === "trading212" ? "Account equity" : undefined} />
     {portfolio.periods.length > 0 && <section className="panel history-panel">
       <div className="panel-heading"><div><p className="section-label">Monthly ledger</p><h2>Opessocius history</h2></div>{onEditReturn && <button className="secondary-button" onClick={onEditReturn}>Edit latest return</button>}</div>
       <div className="table-wrap"><table><thead><tr><th>Month</th><th>Rate</th><th>Return</th><th>Deposits</th><th>Withdrawals</th><th>Ending equity</th></tr></thead><tbody>

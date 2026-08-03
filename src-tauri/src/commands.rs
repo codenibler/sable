@@ -12,8 +12,8 @@ use crate::{
     config::{self, Config, EthereumTokenConfig},
     db,
     models::{
-        AddWalletInput, CryptoAsset, CryptoPortfolio, Dashboard, HistorySyncState, Holding,
-        MonitoredPortfolio, MonthlyWinnings, NetWorthEntry, PeriodReturn, PortfolioPeriod,
+        AddWalletInput, CryptoAsset, CryptoPortfolio, Dashboard, DataPoint, HistorySyncState,
+        Holding, MonitoredPortfolio, MonthlyWinnings, NetWorthEntry, PeriodReturn, PortfolioPeriod,
         SaveNetWorthInput, SourceSummary,
     },
     providers::{crypto, trading212},
@@ -391,14 +391,31 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
 
     let (opessocius_history, opessocius_periods) =
         opessocius_portfolio_history(&state.config, &opessocius_winnings)?;
-    let trading_history = {
-        let database = state.database.lock().map_err(|_| "Database lock failed")?;
-        db::source_history(&database, "trading212", 0)?
-    };
     let trading_basis = if history_is_usable {
         cash_history.net_contributions
     } else {
         trading_invested
+    };
+    let trading_history = {
+        let database = state.database.lock().map_err(|_| "Database lock failed")?;
+        let live_history = db::source_history(&database, "trading212", 0)?;
+        let historical = db::list_net_worth_entries(&database)?
+            .into_iter()
+            .map(|entry| {
+                let invested = if history_is_usable {
+                    db::cash_contributions_through(&database, &entry.date)?
+                } else {
+                    trading_basis
+                };
+                Ok(DataPoint {
+                    timestamp: format!("{}T12:00:00Z", entry.date),
+                    value: entry.stocks,
+                    invested,
+                    opessocius_winnings: 0.0,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        merge_historical_stocks_with_live_history(historical, live_history)
     };
     let mut monitored_portfolios = vec![
         MonitoredPortfolio {
@@ -517,6 +534,17 @@ fn percent_of(amount: f64, basis: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+fn merge_historical_stocks_with_live_history(
+    mut historical: Vec<DataPoint>,
+    live: Vec<DataPoint>,
+) -> Vec<DataPoint> {
+    if let Some(first_live) = live.first() {
+        historical.retain(|point| point.timestamp < first_live.timestamp);
+    }
+    historical.extend(live);
+    historical
 }
 
 fn crypto_portfolio_baseline(portfolio: &CryptoPortfolio) -> f64 {
@@ -1054,8 +1082,9 @@ mod tests {
     use super::{
         accrued_monthly_winnings, crypto_portfolio_baseline, distributed_winnings,
         extend_asset_history_to, grouped_crypto_assets,
-        include_configured_tokens_from_portfolio_start, month_bounds,
-        normalize_crypto_invested_history, planned_default_monthly_returns, return_month,
+        include_configured_tokens_from_portfolio_start, merge_historical_stocks_with_live_history,
+        month_bounds, normalize_crypto_invested_history, planned_default_monthly_returns,
+        return_month,
     };
     use crate::{
         config::EthereumTokenConfig,
@@ -1133,6 +1162,27 @@ mod tests {
         let entries = vec![("2026-07-01".to_string(), 310.0)];
         assert_eq!(distributed_winnings(&entries, start, end).unwrap(), 310.0);
         assert_eq!(distributed_winnings(&entries, end, end).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn uses_net_worth_stocks_until_live_trading_history_begins() {
+        let point = |timestamp: &str, value: f64| DataPoint {
+            timestamp: timestamp.to_string(),
+            value,
+            invested: value,
+            opessocius_winnings: 0.0,
+        };
+        let history = merge_historical_stocks_with_live_history(
+            vec![
+                point("2025-02-24T12:00:00Z", 5_053.0),
+                point("2026-08-02T12:00:00Z", 99_999.0),
+            ],
+            vec![point("2026-08-01T12:00:00Z", 11_000.0)],
+        );
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].value, 5_053.0);
+        assert_eq!(history[1].value, 11_000.0);
     }
 
     #[test]
