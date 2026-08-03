@@ -1,12 +1,12 @@
 [package]
-name = "portfolio-1"
+name = "sable"
 version = "0.1.0"
 description = "A private, local-first portfolio monitor"
 authors = ["Sable"]
 edition = "2024"
 
 [lib]
-name = "portfolio_1_lib"
+name = "sable_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

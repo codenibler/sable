@@ -397,16 +397,20 @@ pub fn cash_history_summary(connection: &Connection) -> Result<CashHistorySummar
     })
 }
 
-pub fn cash_contributions_through(connection: &Connection, date: &str) -> Result<f64, String> {
-    connection
-        .query_row(
-            "SELECT COALESCE(SUM(
-                CASE WHEN event_type IN ('DEPOSIT', 'WITHDRAW', 'WITHDRAWAL')
-                     THEN amount_eur ELSE 0 END
-             ), 0) FROM cash_events WHERE substr(occurred_at, 1, 10) <= ?1",
-            [date],
-            |row| row.get(0),
+pub fn cash_transactions(connection: &Connection) -> Result<Vec<(String, f64)>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT occurred_at, SUM(amount_eur) FROM cash_events
+             WHERE event_type IN ('DEPOSIT', 'WITHDRAW', 'WITHDRAWAL')
+             GROUP BY occurred_at
+             HAVING SUM(amount_eur) != 0
+             ORDER BY occurred_at",
         )
+        .map_err(to_string)?;
+    statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(to_string)?
+        .collect::<Result<Vec<_>, _>>()
         .map_err(to_string)
 }
 
@@ -761,11 +765,11 @@ mod tests {
     use crate::models::{CashEvent, SaveNetWorthInput};
 
     use super::{
-        add_wallet, cash_contributions_through, cash_event_count, create_portfolio,
-        ensure_portfolio, history_sync_state, import_net_worth_history, initialize,
-        list_net_worth_entries, list_portfolios, monthly_winning, monthly_winnings,
-        remove_net_worth_entry, save_cash_events, save_history_sync_state, save_monthly_winnings,
-        save_net_worth_entry, save_snapshot, simple_return_since, snapshot_baseline,
+        add_wallet, cash_event_count, create_portfolio, ensure_portfolio, history_sync_state,
+        import_net_worth_history, initialize, list_net_worth_entries, list_portfolios,
+        monthly_winning, monthly_winnings, remove_net_worth_entry, save_cash_events,
+        save_history_sync_state, save_monthly_winnings, save_net_worth_entry, save_snapshot,
+        simple_return_since, snapshot_baseline,
     };
 
     #[test]
@@ -1002,15 +1006,6 @@ mod tests {
         );
         assert_eq!(save_cash_events(&database, &[(event, 1.0)]).unwrap(), 0);
         assert_eq!(cash_event_count(&database).unwrap(), 1);
-        assert_eq!(
-            cash_contributions_through(&database, "2025-01-01").unwrap(),
-            0.0
-        );
-        assert_eq!(
-            cash_contributions_through(&database, "2025-01-02").unwrap(),
-            100.0
-        );
-
         save_history_sync_state(&database, Some("/next"), false).unwrap();
         let state = history_sync_state(&database).unwrap();
         assert_eq!(state.next_path.as_deref(), Some("/next"));

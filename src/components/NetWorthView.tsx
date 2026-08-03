@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { ArrowDownRight, ArrowUpRight, CircleAlert, Pencil, Plus, Trash2, Trophy, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, ChevronDown, ChevronUp, CircleAlert, Pencil, Plus, Trash2, Trophy, X } from "lucide-react";
 import { api } from "../api";
 import type { NetWorthEntry, SaveNetWorthInput } from "../types";
 
@@ -125,6 +125,11 @@ function NetWorthModal({ entry, latest, formatMoney, onClose, onSaved }: { entry
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const total = categories.reduce((sum, { key }) => sum + (Number(values[key]) || 0), 0);
+  const adjustValue = (key: CategoryKey, direction: 1 | -1) => {
+    const current = Number(values[key]) || 0;
+    const next = Math.max(0, Math.round((current + direction * 0.01) * 100) / 100);
+    setValues((currentValues) => ({ ...currentValues, [key]: String(next) }));
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -146,7 +151,7 @@ function NetWorthModal({ entry, latest, formatMoney, onClose, onSaved }: { entry
 
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="modal net-worth-modal" role="dialog" aria-modal="true" aria-labelledby="net-worth-modal-title"><div className="modal-heading"><div><h2 id="net-worth-modal-title">{entry ? "Edit snapshot" : "Add net worth snapshot"}</h2><p>Enter each balance category. Sable calculates the total and progression automatically.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div><form onSubmit={submit}>
     <label>Date<input autoFocus type="date" value={date} disabled={Boolean(entry)} onChange={(event) => setDate(event.target.value)} required /></label>
-    <div className="net-worth-fields">{categories.map(({ key, label }) => <label key={key}>{label} (€)<input type="number" min="0" step="0.01" inputMode="decimal" value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })} required /></label>)}</div>
+    <div className="net-worth-fields">{categories.map(({ key, label }) => <label key={key}>{label} (€)<span className="number-input"><input type="number" min="0" step="0.01" inputMode="decimal" value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })} required /><span className="number-stepper"><button type="button" onClick={() => adjustValue(key, 1)} aria-label={`Increase ${label}`}><ChevronUp size={12} /></button><button type="button" onClick={() => adjustValue(key, -1)} aria-label={`Decrease ${label}`}><ChevronDown size={12} /></button></span></span></label>)}</div>
     <div className="net-worth-total-preview"><span>Calculated net worth</span><strong>{formatMoney(total)}</strong></div>
     {error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Saving…" : entry ? "Save changes" : "Add snapshot"}</button>
   </form></div></div>;

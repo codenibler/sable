@@ -2,12 +2,12 @@
 Type=Application
 Name=Sable
 Comment=A private, local-first portfolio monitor
-Exec=/usr/bin/env SABLE_ENV_FILE=/home/codenibler/Projects/portfolio_monitor/.env /home/codenibler/Applications/Sable.AppImage
+Exec=/usr/bin/env SABLE_ENV_FILE=/home/codenibler/Projects/sable/.env /home/codenibler/Applications/Sable.AppImage
 TryExec=/home/codenibler/Applications/Sable.AppImage
-Path=/home/codenibler/Projects/portfolio_monitor
+Path=/home/codenibler/Projects/sable
 Icon=/home/codenibler/.local/share/icons/hicolor/512x512/apps/sable.png
 Terminal=false
 Categories=Office;Finance;
 Keywords=portfolio;investments;stocks;crypto;wallet;
 StartupNotify=true
-StartupWMClass=portfolio-1
+StartupWMClass=sable

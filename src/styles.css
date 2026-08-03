@@ -71,7 +71,7 @@ button { color: inherit; }
 .sidebar-collapsed .sidebar { width: 72px; padding-inline: 12px; }
 .sidebar-toggle { position: absolute; top: 24px; right: -14px; z-index: 2; display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: #77746d; background: #11110f; cursor: pointer; }
 .sidebar-toggle:hover { color: var(--gold); border-color: var(--gold-line); }
-.sidebar nav { display: grid; gap: 4px; margin-top: 36px; }
+.sidebar nav { display: grid; gap: 4px; margin-top: 0; }
 .sidebar nav .sidebar-section-label { margin: 24px 11px 6px; }
 .sidebar nav button { display: flex; align-items: center; gap: 11px; padding: 10px 11px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; font-size: var(--font-body); font-weight: 600; cursor: pointer; text-align: left; }
 .sidebar nav button > svg { flex: 0 0 auto; }
@@ -307,6 +307,13 @@ tbody tr:last-child td { border-bottom: 0; }
 .modal label > span { display: inline; color: #5d625f; font-weight: 400; }
 .modal input, .modal select { width: 100%; height: 39px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; outline: 0; color: var(--text); background: #0b0b0a; font-size: var(--font-small); }
 .modal input:focus, .modal select:focus { border-color: rgb(179 154 99 / .38); box-shadow: 0 0 0 3px rgb(179 154 99 / .05); }
+.number-input { position: relative; display: block; }
+.number-input input[type="number"] { padding-right: 38px; -moz-appearance: textfield; }
+.number-input input[type="number"]::-webkit-inner-spin-button, .number-input input[type="number"]::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
+.number-stepper { position: absolute; inset: 1px 1px 1px auto; display: flex; width: 29px; flex-direction: column; overflow: hidden; border-left: 1px solid var(--line-soft); border-radius: 0 6px 6px 0; background: #11110f; }
+.number-stepper button { display: grid; min-height: 0; flex: 1; place-items: center; padding: 0; border: 0; color: #77746d; background: transparent; cursor: pointer; }
+.number-stepper button + button { border-top: 1px solid var(--line-soft); }
+.number-stepper button:hover { color: var(--gold); background: var(--gold-dim); }
 .network-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
 .network-options button { height: 36px; border: 1px solid var(--line); border-radius: 7px; color: #74716a; background: #0b0b0a; font-size: var(--font-caption); cursor: pointer; }
 .network-options button.active { border-color: var(--gold-line); color: var(--gold); background: var(--gold-dim); }

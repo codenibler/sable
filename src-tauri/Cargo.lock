@@ -2512,23 +2512,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "portfolio-1"
-version = "0.1.0"
-dependencies = [
- "bitcoin",
- "chrono",
- "dotenvy",
- "futures-util",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tokio",
-]
-
-[[package]]
 name = "potential_utf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2983,6 +2966,23 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "sable"
+version = "0.1.0"
+dependencies = [
+ "bitcoin",
+ "chrono",
+ "dotenvy",
+ "futures-util",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tokio",
+]
 
 [[package]]
 name = "same-file"

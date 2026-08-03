@@ -403,7 +403,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
             .into_iter()
             .map(|entry| {
                 let invested = if history_is_usable {
-                    db::cash_contributions_through(&database, &entry.date)?
+                    0.0
                 } else {
                     trading_basis
                 };
@@ -415,7 +415,12 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        merge_historical_stocks_with_live_history(historical, live_history)
+        let history = merge_historical_stocks_with_live_history(historical, live_history);
+        if history_is_usable {
+            rebuild_cash_position_history(history, db::cash_transactions(&database)?)?
+        } else {
+            history
+        }
     };
     let mut monitored_portfolios = vec![
         MonitoredPortfolio {
@@ -545,6 +550,108 @@ fn merge_historical_stocks_with_live_history(
     }
     historical.extend(live);
     historical
+}
+
+fn rebuild_cash_position_history(
+    mut history: Vec<DataPoint>,
+    transactions: Vec<(String, f64)>,
+) -> Result<Vec<DataPoint>, String> {
+    let mut transactions = transactions
+        .into_iter()
+        .map(|(timestamp, amount)| {
+            let timestamp = timestamp
+                .parse::<DateTime<Utc>>()
+                .map_err(|_| "Stored cash history contains an invalid timestamp".to_string())?;
+            Ok((timestamp, amount))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    transactions.sort_by_key(|(timestamp, _)| *timestamp);
+
+    let history_times = history
+        .iter()
+        .map(|point| {
+            point
+                .timestamp
+                .parse::<DateTime<Utc>>()
+                .map_err(|_| "Stored portfolio history contains an invalid timestamp".to_string())
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let Some(first_time) = history_times.first().copied() else {
+        return Ok(history);
+    };
+    let Some(last_time) = history_times.last().copied() else {
+        return Ok(history);
+    };
+
+    let mut invested = 0.0;
+    let mut transaction_points = Vec::new();
+    let mut transaction_index = 0;
+    for (point, timestamp) in history.iter_mut().zip(history_times.iter().copied()) {
+        while transaction_index < transactions.len()
+            && transactions[transaction_index].0 <= timestamp
+        {
+            invested += transactions[transaction_index].1;
+            transaction_index += 1;
+        }
+        point.invested = invested;
+    }
+
+    let mut transaction_invested = transactions
+        .iter()
+        .filter(|(timestamp, _)| *timestamp < first_time)
+        .map(|(_, amount)| *amount)
+        .sum::<f64>();
+    for (timestamp, amount) in transactions {
+        if timestamp < first_time || timestamp > last_time {
+            continue;
+        }
+        transaction_invested += amount;
+        transaction_points.push(DataPoint {
+            timestamp: timestamp.to_rfc3339(),
+            value: interpolated_history_value(&history, timestamp),
+            invested: transaction_invested,
+            opessocius_winnings: 0.0,
+        });
+    }
+    history.extend(transaction_points);
+    history.sort_by(|left, right| left.timestamp.cmp(&right.timestamp));
+    Ok(history)
+}
+
+fn interpolated_history_value(history: &[DataPoint], timestamp: DateTime<Utc>) -> f64 {
+    let Some(first) = history.first() else {
+        return 0.0;
+    };
+    let Some(last) = history.last() else {
+        return 0.0;
+    };
+    let Ok(first_time) = first.timestamp.parse::<DateTime<Utc>>() else {
+        return first.value;
+    };
+    let Ok(last_time) = last.timestamp.parse::<DateTime<Utc>>() else {
+        return last.value;
+    };
+    if timestamp <= first_time {
+        return first.value;
+    }
+    if timestamp >= last_time {
+        return last.value;
+    }
+    for pair in history.windows(2) {
+        let Ok(left_time) = pair[0].timestamp.parse::<DateTime<Utc>>() else {
+            continue;
+        };
+        let Ok(right_time) = pair[1].timestamp.parse::<DateTime<Utc>>() else {
+            continue;
+        };
+        if timestamp <= right_time {
+            let span = (right_time - left_time).num_milliseconds() as f64;
+            let elapsed = (timestamp - left_time).num_milliseconds() as f64;
+            let ratio = if span > 0.0 { elapsed / span } else { 0.0 };
+            return pair[0].value + (pair[1].value - pair[0].value) * ratio;
+        }
+    }
+    last.value
 }
 
 fn crypto_portfolio_baseline(portfolio: &CryptoPortfolio) -> f64 {
@@ -1084,7 +1191,7 @@ mod tests {
         extend_asset_history_to, grouped_crypto_assets,
         include_configured_tokens_from_portfolio_start, merge_historical_stocks_with_live_history,
         month_bounds, normalize_crypto_invested_history, planned_default_monthly_returns,
-        return_month,
+        rebuild_cash_position_history, return_month,
     };
     use crate::{
         config::EthereumTokenConfig,
@@ -1183,6 +1290,38 @@ mod tests {
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].value, 5_053.0);
         assert_eq!(history[1].value, 11_000.0);
+    }
+
+    #[test]
+    fn adds_cash_transaction_dates_to_invested_history() {
+        let history = vec![
+            DataPoint {
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+                value: 1_000.0,
+                invested: 0.0,
+                opessocius_winnings: 0.0,
+            },
+            DataPoint {
+                timestamp: "2026-02-01T00:00:00Z".to_string(),
+                value: 1_200.0,
+                invested: 0.0,
+                opessocius_winnings: 0.0,
+            },
+        ];
+        let history = rebuild_cash_position_history(
+            history,
+            vec![
+                ("2026-01-10T00:00:00Z".to_string(), 100.0),
+                ("2026-01-20T00:00:00Z".to_string(), -20.0),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].invested, 0.0);
+        assert_eq!(history[1].invested, 100.0);
+        assert_eq!(history[2].invested, 80.0);
+        assert_eq!(history[3].invested, 80.0);
     }
 
     #[test]
