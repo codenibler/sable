@@ -386,6 +386,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         &mut history,
         &portfolios,
         &state.config.ethereum_tokens,
+        state.config.snapshot_interval_minutes,
     );
 
     let (opessocius_history, opessocius_periods) =
@@ -443,6 +444,7 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                 &mut portfolio_history,
                 std::slice::from_ref(portfolio),
                 &state.config.ethereum_tokens,
+                state.config.snapshot_interval_minutes,
             );
             if let Some(started_at) = portfolio_history
                 .first()
@@ -602,6 +604,7 @@ fn include_configured_tokens_from_portfolio_start(
     history: &mut [crate::models::DataPoint],
     portfolios: &[CryptoPortfolio],
     tokens: &[EthereumTokenConfig],
+    snapshot_interval_minutes: i64,
 ) {
     for asset in portfolios
         .iter()
@@ -611,10 +614,17 @@ fn include_configured_tokens_from_portfolio_start(
         let Some(first_asset_point) = asset.history.first() else {
             continue;
         };
-        for point in history
-            .iter_mut()
-            .filter(|point| point.timestamp.as_str() < first_asset_point.timestamp.as_str())
-        {
+        let Ok(first_asset_time) = first_asset_point.timestamp.parse::<DateTime<Utc>>() else {
+            continue;
+        };
+        let before_capture_window =
+            first_asset_time - Duration::minutes(snapshot_interval_minutes.max(1));
+        for point in history.iter_mut().filter(|point| {
+            point
+                .timestamp
+                .parse::<DateTime<Utc>>()
+                .is_ok_and(|timestamp| timestamp <= before_capture_window)
+        }) {
             point.value += first_asset_point.value;
             point.invested += first_asset_point.invested;
         }
@@ -1175,6 +1185,7 @@ mod tests {
     #[test]
     fn treats_configured_tokens_as_part_of_the_original_crypto_basis() {
         let first_timestamp = "2026-07-01T00:00:00+00:00";
+        let same_capture_timestamp = "2026-07-31T23:59:59+00:00";
         let detected_timestamp = "2026-08-01T00:00:00+00:00";
         let link = CryptoAsset {
             id: "link".to_string(),
@@ -1234,6 +1245,12 @@ mod tests {
                 opessocius_winnings: 0.0,
             },
             DataPoint {
+                timestamp: same_capture_timestamp.to_string(),
+                value: 320.0,
+                invested: 320.0,
+                opessocius_winnings: 0.0,
+            },
+            DataPoint {
                 timestamp: detected_timestamp.to_string(),
                 value: 320.0,
                 invested: 320.0,
@@ -1246,10 +1263,19 @@ mod tests {
             &mut combined_history,
             std::slice::from_ref(&portfolio),
             &tokens,
+            60,
         );
         assert_eq!(combined_history[0].value, 320.0);
         assert_eq!(combined_history[0].invested, 320.0);
         assert_eq!(combined_history[1].value, 320.0);
+        assert_eq!(combined_history[2].value, 320.0);
+        assert_eq!(
+            combined_history
+                .iter()
+                .map(|point| point.value)
+                .fold(0.0_f64, f64::max),
+            320.0
+        );
 
         let mut link_history = link.history;
         extend_asset_history_to(&mut link_history, first_timestamp);
