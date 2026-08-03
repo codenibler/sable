@@ -38,6 +38,7 @@ function domainFor(min: number, max: number) {
 type PerformanceChartProps = {
   history: DataPoint[];
   format: (value: number) => string;
+  formatAxis: (value: number) => string;
   title?: string;
   valueLabel?: string;
   baselineLabel?: string;
@@ -47,6 +48,7 @@ type PerformanceChartProps = {
 export function PerformanceChart({
   history,
   format,
+  formatAxis,
   title = "Performance",
   valueLabel = "Portfolio value",
   baselineLabel = "Invested",
@@ -98,7 +100,7 @@ export function PerformanceChart({
             <path className="equity-line" d={line} />
           </svg>
           <div className="chart-y-axis" aria-hidden="true">
-            {yAxisValues.map((value, index) => <span key={index} style={{ top: `${index * 25}%` }}>{format(value)}</span>)}
+            {yAxisValues.map((value, index) => <span key={index} style={{ top: `${index * 25}%` }}>{formatAxis(value)}</span>)}
           </div>
           <div className="chart-x-axis">
             <span>{new Date(points[0].timestamp).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>

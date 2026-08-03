@@ -143,7 +143,12 @@ function App() {
     () => new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }),
     [currency],
   );
+  const wholeMoney = useMemo(
+    () => new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 0 }),
+    [currency],
+  );
   const formatMoney = (value: number) => money.format(value);
+  const formatWholeMoney = (value: number) => wholeMoney.format(value);
   const selectedPortfolio = view.startsWith("portfolio:")
     ? dashboard?.monitoredPortfolios.find((portfolio) => `portfolio:${portfolio.id}` === view)
     : undefined;
@@ -203,11 +208,11 @@ function App() {
         {view === "net-worth" && netWorthError && <div className="error-banner"><CircleAlert size={18} /><div><strong>Could not load net worth</strong><p>{netWorthError}</p></div></div>}
 
         {view === "net-worth" ? netWorthLoading && !netWorthEntries.length ? <Loading /> : <NetWorthView entries={netWorthEntries} formatMoney={formatMoney} onChanged={refreshNetWorth} /> : !dashboard && loading ? <Loading /> : dashboard && view === "overview" ? (
-          <Overview dashboard={dashboard} formatMoney={formatMoney} onAddWinnings={() => setWinningsModal(true)} />
+          <Overview dashboard={dashboard} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} onAddWinnings={() => setWinningsModal(true)} />
         ) : dashboard && selectedPortfolio && selectedCryptoPortfolio ? (
-          <CryptoPortfolioDetailView portfolio={selectedCryptoPortfolio} monitored={selectedPortfolio} formatMoney={formatMoney} />
+          <CryptoPortfolioDetailView portfolio={selectedCryptoPortfolio} monitored={selectedPortfolio} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} />
         ) : dashboard && selectedPortfolio ? (
-          <PortfolioDetailView portfolio={selectedPortfolio} formatMoney={formatMoney} onEditReturn={selectedPortfolio.id === "opessocius" && dashboard.opessociusMonthlyReturn ? () => setWinningsModal(true) : undefined} />
+          <PortfolioDetailView portfolio={selectedPortfolio} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} onEditReturn={selectedPortfolio.id === "opessocius" && dashboard.opessociusMonthlyReturn ? () => setWinningsModal(true) : undefined} />
         ) : dashboard ? (
           <Wallets
             portfolios={dashboard.portfolios}
@@ -239,7 +244,7 @@ function WindowControls() {
   );
 }
 
-function Overview({ dashboard, formatMoney, onAddWinnings }: { dashboard: Dashboard; formatMoney: (value: number) => string; onAddWinnings: () => void }) {
+function Overview({ dashboard, formatMoney, formatWholeMoney, onAddWinnings }: { dashboard: Dashboard; formatMoney: (value: number) => string; formatWholeMoney: (value: number) => string; onAddWinnings: () => void }) {
   const positive = dashboard.totalReturn >= 0;
   return (
     <div className="view-stack">
@@ -274,7 +279,7 @@ function Overview({ dashboard, formatMoney, onAddWinnings }: { dashboard: Dashbo
         <Metric label="Cash" value={formatMoney(dashboard.cashValue)} />
       </section>
 
-      <PerformanceChart history={dashboard.history} format={formatMoney} />
+      <PerformanceChart history={dashboard.history} format={formatMoney} formatAxis={formatWholeMoney} />
 
       <section className="lower-grid">
         <div className="panel holdings-panel">
@@ -303,7 +308,7 @@ function Overview({ dashboard, formatMoney, onAddWinnings }: { dashboard: Dashbo
   );
 }
 
-function PortfolioDetailView({ portfolio, formatMoney, onEditReturn }: { portfolio: MonitoredPortfolio; formatMoney: (value: number) => string; onEditReturn?: () => void }) {
+function PortfolioDetailView({ portfolio, formatMoney, formatWholeMoney, onEditReturn }: { portfolio: MonitoredPortfolio; formatMoney: (value: number) => string; formatWholeMoney: (value: number) => string; onEditReturn?: () => void }) {
   const positive = portfolio.totalReturn >= 0;
   const latestPeriod = portfolio.periods.at(-1);
   return <div className="view-stack portfolio-detail-view">
@@ -319,7 +324,7 @@ function PortfolioDetailView({ portfolio, formatMoney, onEditReturn }: { portfol
       <Metric label="Total return" value={`${portfolio.returnPercent.toFixed(2)}%`} helper={formatMoney(portfolio.totalReturn)} valueClassName={positive ? "positive-text" : "negative-text"} />
       <Metric label={latestPeriod ? "Latest month" : portfolio.itemLabel} value={latestPeriod ? `${latestPeriod.returnPercent.toFixed(2)}%` : String(portfolio.itemCount)} helper={latestPeriod ? formatMoney(latestPeriod.returnValue) : `${portfolio.itemCount} ${portfolio.itemLabel}`} valueClassName={latestPeriod ? latestPeriod.returnValue >= 0 ? "positive-text" : "negative-text" : undefined} />
     </section>
-    <PerformanceChart history={portfolio.history} format={formatMoney} />
+    <PerformanceChart history={portfolio.history} format={formatMoney} formatAxis={formatWholeMoney} />
     {portfolio.periods.length > 0 && <section className="panel history-panel">
       <div className="panel-heading"><div><p className="section-label">Monthly ledger</p><h2>Opessocius history</h2></div>{onEditReturn && <button className="secondary-button" onClick={onEditReturn}>Edit latest return</button>}</div>
       <div className="table-wrap"><table><thead><tr><th>Month</th><th>Rate</th><th>Return</th><th>Deposits</th><th>Withdrawals</th><th>Ending equity</th></tr></thead><tbody>
@@ -329,7 +334,7 @@ function PortfolioDetailView({ portfolio, formatMoney, onEditReturn }: { portfol
   </div>;
 }
 
-function CryptoPortfolioDetailView({ portfolio, monitored, formatMoney }: { portfolio: CryptoPortfolio; monitored: MonitoredPortfolio; formatMoney: (value: number) => string }) {
+function CryptoPortfolioDetailView({ portfolio, monitored, formatMoney, formatWholeMoney }: { portfolio: CryptoPortfolio; monitored: MonitoredPortfolio; formatMoney: (value: number) => string; formatWholeMoney: (value: number) => string }) {
   const [selectedAssetId, setSelectedAssetId] = useState("all");
   const selectedAsset = selectedAssetId === "all" ? undefined : portfolio.assets.find((asset) => asset.id === selectedAssetId);
   const visibleWallets = selectedAsset
@@ -376,6 +381,7 @@ function CryptoPortfolioDetailView({ portfolio, monitored, formatMoney }: { port
     <PerformanceChart
       history={history}
       format={formatMoney}
+      formatAxis={formatWholeMoney}
       title={`${subject} performance`}
       valueLabel={selectedAsset ? `${selectedAsset.symbol} value` : "Wallet value"}
       baselineLabel="First tracked value"
