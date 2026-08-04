@@ -76,7 +76,9 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
         (winnings, editable)
     };
     let total_opessocius_winnings: f64 = opessocius_winnings.iter().map(|(_, amount)| amount).sum();
-    let trading_result = if state.config.trading212_is_configured() {
+    let trading_result = if state.config.demo_mode {
+        Ok(demo_trading_overview())
+    } else if state.config.trading212_is_configured() {
         trading212::fetch_overview(&state.client, &state.config).await
     } else {
         Err("Add read-only Trading 212 credentials to .env".to_string())
@@ -85,7 +87,10 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
     let has_wallets = portfolios
         .iter()
         .any(|portfolio| !portfolio.wallets.is_empty());
-    let price_result = if has_wallets {
+    if state.config.demo_mode {
+        populate_demo_wallets(&mut portfolios);
+    }
+    let price_result = if has_wallets && !state.config.demo_mode {
         Some(crypto::prices(&state.client, &state.config).await)
     } else {
         None
@@ -539,6 +544,70 @@ fn percent_of(amount: f64, basis: f64) -> f64 {
     } else {
         0.0
     }
+}
+
+fn demo_trading_overview() -> crate::models::TradingOverview {
+    let holdings = [
+        ("VWCE", "Vanguard FTSE All-World ETF", 18_000.0, 16_000.0, 180.0),
+        ("MSFT", "Microsoft", 12_000.0, 9_800.0, 48.0),
+        ("ASML", "ASML Holding", 9_000.0, 7_600.0, 12.0),
+        ("NVDA", "NVIDIA", 6_000.0, 5_600.0, 40.0),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (symbol, name, value, invested, quantity))| Holding {
+        id: format!("demo-t212-{index}"),
+        symbol: symbol.to_string(),
+        name: name.to_string(),
+        source: "Trading 212".to_string(),
+        quantity,
+        price: value / quantity,
+        value,
+        return_value: value - invested,
+        allocation: 0.0,
+    })
+    .collect();
+    crate::models::TradingOverview {
+        total_value: 50_000.0,
+        invested_value: 39_000.0,
+        cash_value: 5_000.0,
+        return_value: 11_000.0,
+        holdings,
+    }
+}
+
+fn populate_demo_wallets(portfolios: &mut [CryptoPortfolio]) {
+    let Some(portfolio) = portfolios.first_mut() else {
+        return;
+    };
+    if !portfolio.wallets.is_empty() {
+        return;
+    }
+    portfolio.wallets.push(crate::models::Wallet {
+        id: -1,
+        portfolio_id: portfolio.id,
+        network: "btc".to_string(),
+        address: "bc1qdemoappearancewallet000000000000000000".to_string(),
+        display_address: "bc1qdemoappearancewallet000000000000000000".to_string(),
+        label: "Demo hardware wallet".to_string(),
+        wallet_type: "address".to_string(),
+        address_count: 1,
+        balance: 0.125,
+        symbol: "BTC".to_string(),
+        value: 10_000.0,
+        assets: vec![crate::models::WalletAsset {
+            id: "btc".to_string(),
+            network: "btc".to_string(),
+            symbol: "BTC".to_string(),
+            name: "Bitcoin".to_string(),
+            balance: 0.125,
+            price: 80_000.0,
+            value: 10_000.0,
+            message: None,
+        }],
+        message: None,
+        last_checked_at: None,
+    });
 }
 
 fn merge_historical_stocks_with_live_history(

@@ -31,6 +31,7 @@ pub struct EthereumTokenConfig {
 
 #[derive(Clone)]
 pub struct Config {
+    pub demo_mode: bool,
     pub trading212_api_key: Option<String>,
     pub trading212_api_secret: Option<String>,
     pub trading212_base_url: String,
@@ -75,6 +76,9 @@ impl Config {
             net_worth_history("NET_WORTH_HISTORY_FILE", config_directory)?;
 
         Ok(Self {
+            demo_mode: optional("SABLE_DEMO_MODE").is_some_and(|value| {
+                value == "1" || value.eq_ignore_ascii_case("true")
+            }),
             trading212_api_key: optional("TRADING212_API_KEY"),
             trading212_api_secret: optional("TRADING212_API_SECRET"),
             trading212_base_url: required("TRADING212_BASE_URL")?,

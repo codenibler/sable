@@ -4,6 +4,8 @@ Sable is a fully vibe-coded aggregated portfolio and net worth monitor, which st
 
 Eventually, this might also become an iOS app, but don't quote me on that
 
+https://github.com/user-attachments/assets/d3c770da-57f0-4e72-92e8-5d3cc05acb20
+
 ## Run locally
 
 Requirements: Node.js, npm, Rust, and the Linux packages required by Tauri 2/WebKitGTK.
