@@ -473,7 +473,6 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                 &state.config.ethereum_tokens,
                 state.config.snapshot_interval_minutes,
             );
-            normalize_crypto_invested_history(&mut portfolio_history, invested);
             if let Some(started_at) = portfolio_history
                 .first()
                 .map(|point| point.timestamp.clone())
@@ -740,15 +739,20 @@ fn crypto_assets(
     let mut assets = Vec::new();
     for (id, (network, symbol, name, balance, value, wallet_count)) in grouped {
         let source_kind = format!("crypto-{id}");
-        let invested_value =
-            db::snapshot_baseline(connection, &source_kind, portfolio.id)?.unwrap_or(value);
-        db::save_snapshot(
+        let price = if balance > 0.0 { value / balance } else { 0.0 };
+        let invested_value = crypto_invested_basis(
+            db::crypto_position(connection, &source_kind, portfolio.id)?,
+            balance,
+            price,
+            value,
+        );
+        db::save_crypto_snapshot(
             connection,
             &source_kind,
             portfolio.id,
             value,
             invested_value,
-            0.0,
+            balance,
             snapshot_interval_minutes,
         )?;
         let total_return = value - invested_value;
@@ -779,6 +783,23 @@ fn crypto_assets(
         _ => 4,
     });
     Ok(assets)
+}
+
+fn crypto_invested_basis(
+    previous: Option<(f64, Option<f64>)>,
+    quantity: f64,
+    price: f64,
+    value: f64,
+) -> f64 {
+    let Some((previous_invested, previous_quantity)) = previous else {
+        return value;
+    };
+    let Some(previous_quantity) = previous_quantity else {
+        // Existing databases did not retain units. Preserve their established return
+        // until this first quantity-aware snapshot seeds transfer detection.
+        return previous_invested;
+    };
+    (previous_invested + (quantity - previous_quantity) * price).max(0.0)
 }
 
 type GroupedCryptoAssets = BTreeMap<String, (String, String, String, f64, f64, usize)>;
@@ -824,14 +845,16 @@ fn include_configured_tokens_from_portfolio_start(
         };
         let before_capture_window =
             first_asset_time - Duration::minutes(snapshot_interval_minutes.max(1));
-        for point in history.iter_mut().filter(|point| {
-            point
-                .timestamp
-                .parse::<DateTime<Utc>>()
-                .is_ok_and(|timestamp| timestamp <= before_capture_window)
-        }) {
-            point.value += first_asset_point.value;
-            point.invested += first_asset_point.invested;
+        for point in history.iter_mut() {
+            let Ok(timestamp) = point.timestamp.parse::<DateTime<Utc>>() else {
+                continue;
+            };
+            if timestamp < first_asset_time {
+                point.invested += first_asset_point.invested;
+                if timestamp <= before_capture_window {
+                    point.value += first_asset_point.value;
+                }
+            }
         }
     }
 }
@@ -840,12 +863,6 @@ fn is_configured_token(asset: &CryptoAsset, tokens: &[EthereumTokenConfig]) -> b
     tokens
         .iter()
         .any(|token| token.symbol.eq_ignore_ascii_case(&asset.symbol))
-}
-
-fn normalize_crypto_invested_history(history: &mut [crate::models::DataPoint], invested: f64) {
-    for point in history {
-        point.invested = invested;
-    }
 }
 
 fn extend_asset_history_to(history: &mut Vec<crate::models::DataPoint>, started_at: &str) {
@@ -1256,11 +1273,10 @@ fn mirror_net_worth_history(state: &AppState, database: &Connection) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::{
-        accrued_monthly_winnings, crypto_portfolio_baseline, distributed_winnings,
-        extend_asset_history_to, grouped_crypto_assets,
+        accrued_monthly_winnings, crypto_invested_basis, crypto_portfolio_baseline,
+        distributed_winnings, extend_asset_history_to, grouped_crypto_assets,
         include_configured_tokens_from_portfolio_start, merge_historical_stocks_with_live_history,
-        month_bounds, normalize_crypto_invested_history, planned_default_monthly_returns,
-        rebuild_cash_position_history, return_month,
+        month_bounds, planned_default_monthly_returns, rebuild_cash_position_history, return_month,
     };
     use crate::{
         config::EthereumTokenConfig,
@@ -1391,6 +1407,20 @@ mod tests {
         assert_eq!(history[1].invested, 100.0);
         assert_eq!(history[2].invested, 80.0);
         assert_eq!(history[3].invested, 80.0);
+    }
+
+    #[test]
+    fn counts_added_crypto_units_as_invested_capital() {
+        let after_price_change = crypto_invested_basis(Some((100.0, Some(1.0))), 1.0, 120.0, 120.0);
+        assert_eq!(after_price_change, 100.0);
+
+        let after_deposit = crypto_invested_basis(Some((100.0, Some(1.0))), 1.5, 120.0, 180.0);
+        assert_eq!(after_deposit, 160.0);
+        assert_eq!(180.0 - after_deposit, 20.0);
+
+        let after_withdrawal = crypto_invested_basis(Some((160.0, Some(1.5))), 1.25, 120.0, 150.0);
+        assert_eq!(after_withdrawal, 130.0);
+        assert_eq!(150.0 - after_withdrawal, 20.0);
     }
 
     #[test]
@@ -1530,7 +1560,6 @@ mod tests {
             &tokens,
             60,
         );
-        normalize_crypto_invested_history(&mut combined_history, 320.0);
         assert_eq!(combined_history[0].value, 320.0);
         assert_eq!(combined_history[0].invested, 320.0);
         assert_eq!(combined_history[1].value, 320.0);

@@ -78,7 +78,8 @@ fn initialize(connection: &Connection) -> Result<(), String> {
                 captured_at TEXT NOT NULL,
                 value_eur REAL NOT NULL,
                 invested_eur REAL NOT NULL,
-                opessocius_winnings_eur REAL NOT NULL DEFAULT 0
+                opessocius_winnings_eur REAL NOT NULL DEFAULT 0,
+                quantity REAL
              );
              CREATE INDEX IF NOT EXISTS snapshots_source_time
                 ON snapshots(source_kind, source_id, captured_at);
@@ -147,6 +148,7 @@ fn initialize(connection: &Connection) -> Result<(), String> {
         connection,
         "ALTER TABLE snapshots ADD COLUMN opessocius_winnings_eur REAL NOT NULL DEFAULT 0",
     )?;
+    add_column_if_missing(connection, "ALTER TABLE snapshots ADD COLUMN quantity REAL")?;
     add_column_if_missing(
         connection,
         "ALTER TABLE manual_monthly_winnings ADD COLUMN is_override INTEGER NOT NULL DEFAULT 1",
@@ -569,6 +571,49 @@ pub fn save_snapshot(
     opessocius_winnings: f64,
     interval_minutes: i64,
 ) -> Result<(), String> {
+    save_snapshot_with_quantity(
+        connection,
+        source_kind,
+        source_id,
+        value,
+        invested,
+        opessocius_winnings,
+        None,
+        interval_minutes,
+    )
+}
+
+pub fn save_crypto_snapshot(
+    connection: &Connection,
+    source_kind: &str,
+    source_id: i64,
+    value: f64,
+    invested: f64,
+    quantity: f64,
+    interval_minutes: i64,
+) -> Result<(), String> {
+    save_snapshot_with_quantity(
+        connection,
+        source_kind,
+        source_id,
+        value,
+        invested,
+        0.0,
+        Some(quantity),
+        interval_minutes,
+    )
+}
+
+fn save_snapshot_with_quantity(
+    connection: &Connection,
+    source_kind: &str,
+    source_id: i64,
+    value: f64,
+    invested: f64,
+    opessocius_winnings: f64,
+    quantity: Option<f64>,
+    interval_minutes: i64,
+) -> Result<(), String> {
     let last: Option<(i64, String)> = connection
         .query_row(
             "SELECT id, captured_at FROM snapshots
@@ -592,12 +637,13 @@ pub fn save_snapshot(
         connection
             .execute(
                 "UPDATE snapshots SET captured_at = ?1, value_eur = ?2, invested_eur = ?3,
-                        opessocius_winnings_eur = ?4 WHERE id = ?5",
+                        opessocius_winnings_eur = ?4, quantity = ?5 WHERE id = ?6",
                 params![
                     Utc::now().to_rfc3339(),
                     value,
                     invested,
                     opessocius_winnings,
+                    quantity,
                     id
                 ],
             )
@@ -606,19 +652,61 @@ pub fn save_snapshot(
         connection
             .execute(
                 "INSERT INTO snapshots(source_kind, source_id, captured_at, value_eur, invested_eur,
-                        opessocius_winnings_eur) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        opessocius_winnings_eur, quantity) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     source_kind,
                     source_id,
                     Utc::now().to_rfc3339(),
                     value,
                     invested,
-                    opessocius_winnings
+                    opessocius_winnings,
+                    quantity
                 ],
             )
             .map_err(to_string)?;
     }
     Ok(())
+}
+
+pub fn crypto_position(
+    connection: &Connection,
+    source_kind: &str,
+    source_id: i64,
+) -> Result<Option<(f64, Option<f64>)>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT invested_eur, quantity, value_eur FROM snapshots
+             WHERE source_kind = ?1 AND source_id = ?2
+             ORDER BY captured_at DESC LIMIT 2",
+        )
+        .map_err(to_string)?;
+    let positions = statement
+        .query_map(params![source_kind, source_id], |row| {
+            Ok((
+                row.get::<_, f64>(0)?,
+                row.get::<_, Option<f64>>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })
+        .map_err(to_string)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(to_string)?;
+    let Some((mut invested, quantity, latest_value)) = positions.first().copied() else {
+        return Ok(None);
+    };
+
+    // Before quantity-aware snapshots existed, a freshly received deposit could already
+    // have been recorded as a sharp value jump. Repair that most recent legacy point once;
+    // subsequent transfers use exact unit deltas below rather than this migration heuristic.
+    if quantity.is_none()
+        && let Some((_, _, previous_value)) = positions.get(1)
+    {
+        let increase = latest_value - previous_value;
+        if increase > 1.0 && increase > previous_value.abs() * 0.05 {
+            invested += increase;
+        }
+    }
+    Ok(Some((invested, quantity)))
 }
 
 pub fn total_history(connection: &Connection) -> Result<Vec<DataPoint>, String> {
@@ -738,6 +826,7 @@ pub fn monthly_winnings(
         .map_err(to_string)
 }
 
+#[cfg(test)]
 pub fn snapshot_baseline(
     connection: &Connection,
     source_kind: &str,
@@ -765,11 +854,11 @@ mod tests {
     use crate::models::{CashEvent, SaveNetWorthInput};
 
     use super::{
-        add_wallet, cash_event_count, create_portfolio, ensure_portfolio, history_sync_state,
-        import_net_worth_history, initialize, list_net_worth_entries, list_portfolios,
-        monthly_winning, monthly_winnings, remove_net_worth_entry, save_cash_events,
-        save_history_sync_state, save_monthly_winnings, save_net_worth_entry, save_snapshot,
-        simple_return_since, snapshot_baseline,
+        add_wallet, cash_event_count, create_portfolio, crypto_position, ensure_portfolio,
+        history_sync_state, import_net_worth_history, initialize, list_net_worth_entries,
+        list_portfolios, monthly_winning, monthly_winnings, remove_net_worth_entry,
+        save_cash_events, save_crypto_snapshot, save_history_sync_state, save_monthly_winnings,
+        save_net_worth_entry, save_snapshot, simple_return_since, snapshot_baseline,
     };
 
     #[test]
@@ -900,6 +989,38 @@ mod tests {
         assert_eq!(count, 1);
         assert_eq!(value, 12.0);
         assert_eq!(snapshot_baseline(&database, "total", 0).unwrap(), Some(8.0));
+    }
+
+    #[test]
+    fn stores_crypto_quantity_with_its_invested_basis() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        save_crypto_snapshot(&database, "crypto-btc", 1, 120.0, 100.0, 1.0, 60)
+            .expect("crypto snapshot");
+
+        assert_eq!(
+            crypto_position(&database, "crypto-btc", 1).unwrap(),
+            Some((100.0, Some(1.0)))
+        );
+    }
+
+    #[test]
+    fn repairs_a_sharp_deposit_jump_from_legacy_snapshots() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        database
+            .execute_batch(
+                "INSERT INTO snapshots(source_kind, source_id, captured_at, value_eur, invested_eur)
+                 VALUES ('crypto-btc', 1, '2026-08-04T00:00:00Z', 236, 236);
+                 INSERT INTO snapshots(source_kind, source_id, captured_at, value_eur, invested_eur)
+                 VALUES ('crypto-btc', 1, '2026-08-05T00:00:00Z', 324, 236);",
+            )
+            .expect("legacy snapshots");
+
+        assert_eq!(
+            crypto_position(&database, "crypto-btc", 1).unwrap(),
+            Some((324.0, None))
+        );
     }
 
     #[test]

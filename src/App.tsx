@@ -399,7 +399,7 @@ function CryptoPortfolioDetailView({ portfolio, monitored, formatMoney, formatWh
         return <div className="wallet-row wallet-row-readonly" key={wallet.id}><span className={`network-mark ${holding?.id ?? wallet.network}`}>{(holding?.symbol ?? wallet.symbol).slice(0, 1)}</span><div className="wallet-identity"><strong>{wallet.label}</strong><small>{wallet.walletType === "xpub" ? `Bitcoin XPUB · ${wallet.addressCount} active derived address${wallet.addressCount === 1 ? "" : "es"}` : `${wallet.displayAddress.slice(0, 10)}…${wallet.displayAddress.slice(-8)}`}</small></div><div className="wallet-balance"><strong>{holding ? `${holding.balance.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${holding.symbol}` : formatMoney(wallet.value)}</strong><small>{wallet.message ?? (holding ? formatMoney(holding.value) : wallet.assets.map((asset) => asset.symbol).join(" · "))}</small></div></div>;
       })}</div> : <Empty icon={<WalletCards size={22} />} title="No matching wallets" text="Add a public address or XPUB to begin tracking this cryptocurrency." />}
     </section>
-    <p className="tracking-disclaimer">Tracked return measures value change since Sable’s first local snapshot. It is not tax-lot cost basis and does not infer deposits or withdrawals.</p>
+    <p className="tracking-disclaimer">Tracked return measures price performance since Sable began tracking. Changes in coin balance are treated as deposits or withdrawals at the current market price; this is not tax-lot cost basis.</p>
   </div>;
 }
 
