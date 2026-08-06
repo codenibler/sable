@@ -5,15 +5,15 @@ import type { NetWorthEntry, SaveNetWorthInput } from "../types";
 
 type CategoryKey = "stocks" | "opessocius" | "crypto" | "savings" | "spending" | "receivables" | "cash" | "misc";
 
-const categories: { key: CategoryKey; label: string }[] = [
-  { key: "stocks", label: "Stocks" },
-  { key: "opessocius", label: "Opessocius" },
-  { key: "crypto", label: "Crypto" },
-  { key: "savings", label: "Savings" },
-  { key: "spending", label: "Spending" },
-  { key: "receivables", label: "Receivables" },
-  { key: "cash", label: "Cash" },
-  { key: "misc", label: "Misc" },
+const categories: { key: CategoryKey; label: string; color: string }[] = [
+  { key: "stocks", label: "Stocks", color: "#bda66f" },
+  { key: "opessocius", label: "Opessocius", color: "#7f8f86" },
+  { key: "crypto", label: "Crypto", color: "#8b7ca8" },
+  { key: "savings", label: "Savings", color: "#6f8d98" },
+  { key: "spending", label: "Spending", color: "#a87467" },
+  { key: "receivables", label: "Receivables", color: "#98865e" },
+  { key: "cash", label: "Cash", color: "#688074" },
+  { key: "misc", label: "Misc", color: "#716d68" },
 ];
 
 const day = 24 * 60 * 60 * 1000;
@@ -93,6 +93,7 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
         </div>
       </div>
     </section>
+    <CompositionCharts entries={entries} latest={latest} formatMoney={formatMoney} />
     <p className="tracking-disclaimer">Growth includes deposits, withdrawals, and reclassification between categories; it is a balance-sheet progression, not investment return. MoM columns compare each snapshot with the prior recorded date, including multiple entries within one month.</p>
 
     <section className="panel net-worth-history-panel">
@@ -116,6 +117,64 @@ function NetWorthMetric({ label, value, helper, positive }: { label: string; val
 
 function Insight({ label, value, note, positive }: { label: string; value: string; note: string; positive: boolean }) {
   return <div className="growth-insight"><span>{label}</span><strong className={positive ? "positive-text" : "negative-text"}>{value}</strong><small>{note}</small></div>;
+}
+
+function CompositionCharts({ entries, latest, formatMoney }: { entries: NetWorthEntry[]; latest: NetWorthEntry; formatMoney: (value: number) => string }) {
+  const monthlyEntries = useMemo(() => {
+    const byMonth = new Map<string, NetWorthEntry>();
+    entries.forEach((entry) => byMonth.set(entry.date.slice(0, 7), entry));
+    return [...byMonth.values()];
+  }, [entries]);
+  const latestComposition = categories
+    .map((category) => ({ ...category, value: latest[category.key], percent: latest.netWorth > 0 ? latest[category.key] / latest.netWorth * 100 : 0 }))
+    .filter((category) => category.value > 0)
+    .sort((left, right) => right.value - left.value);
+  let turn = 0;
+  const pieStops = latestComposition.map((category) => {
+    const start = turn;
+    turn += category.percent;
+    return `${category.color} ${start}% ${turn}%`;
+  }).join(", ");
+
+  return <section className="panel composition-panel">
+    <div className="panel-heading composition-heading">
+      <div><p className="section-label">Portfolio structure</p><h2>Net worth composition</h2></div>
+      <span className="muted">Monthly share of total</span>
+    </div>
+    <div className="composition-grid">
+      <div className="composition-history">
+        <div className="composition-subheading"><div><strong>Composition over time</strong><small>Latest snapshot from each month</small></div></div>
+        <div className="composition-scroll">
+          <div className="composition-bars" style={{ gridTemplateColumns: `repeat(${monthlyEntries.length}, minmax(52px, 1fr))` }}>
+            {monthlyEntries.map((entry) => <div className="composition-month" key={entry.date}>
+              <div className="composition-stack" aria-label={`${formatDate(entry.date, { month: "long", year: "numeric" })} composition`}>
+                {categories.map((category) => {
+                  const percent = entry.netWorth > 0 ? entry[category.key] / entry.netWorth * 100 : 0;
+                  if (percent <= 0) return null;
+                  return <span key={category.key} style={{ height: `${percent}%`, background: category.color }} title={`${category.label}: ${percent.toFixed(1)}% · ${formatMoney(entry[category.key])}`}>
+                    {percent >= 10 && <small>{percent.toFixed(0)}%</small>}
+                  </span>;
+                })}
+              </div>
+              <small>{formatDate(entry.date, { month: "short", year: "2-digit" })}</small>
+            </div>)}
+          </div>
+        </div>
+        <div className="composition-legend">{categories.map((category) => <span key={category.key}><i style={{ background: category.color }} />{category.label}</span>)}</div>
+      </div>
+      <div className="latest-composition">
+        <div className="composition-subheading"><div><strong>Latest composition</strong><small>{formatDate(latest.date)}</small></div></div>
+        <div className="composition-pie-wrap">
+          <div className="composition-pie" style={{ background: pieStops ? `conic-gradient(${pieStops})` : "#24231f" }} role="img" aria-label={`Latest net worth composition as of ${formatDate(latest.date)}`}>
+            <div><span>Total</span><strong>{formatMoney(latest.netWorth)}</strong></div>
+          </div>
+        </div>
+        <div className="composition-breakdown">{latestComposition.map((category) => <div key={category.key}>
+          <i style={{ background: category.color }} /><span>{category.label}</span><strong>{category.percent.toFixed(1)}%</strong><small>{formatMoney(category.value)}</small>
+        </div>)}</div>
+      </div>
+    </div>
+  </section>;
 }
 
 function NetWorthModal({ entry, latest, formatMoney, onClose, onSaved }: { entry?: NetWorthEntry; latest?: NetWorthEntry; formatMoney: (value: number) => string; onClose: () => void; onSaved: () => Promise<void> }) {

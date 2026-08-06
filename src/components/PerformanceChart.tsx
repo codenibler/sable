@@ -35,6 +35,20 @@ function domainFor(min: number, max: number) {
   return [Math.max(0, midpoint - spread / 2), Math.max(midpoint + spread / 2, 1)] as const;
 }
 
+function xAxisTicks(points: DataPoint[], maximum = 6): { point: DataPoint; position: number }[] {
+  const tickCount = Math.min(maximum, points.length);
+  if (tickCount === 0) return [];
+  if (tickCount === 1) return [{ point: points[0], position: 0 }];
+  const indexes = Array.from({ length: tickCount }, (_, index) => Math.round(index * (points.length - 1) / (tickCount - 1)));
+  return [...new Set(indexes)].map((index) => ({ point: points[index], position: index / (points.length - 1) * 100 }));
+}
+
+function formatXAxisDate(timestamp: string, includeYear: boolean) {
+  return new Date(timestamp).toLocaleDateString(undefined, includeYear
+    ? { month: "short", year: "2-digit" }
+    : { day: "numeric", month: "short" });
+}
+
 type PerformanceChartProps = {
   history: DataPoint[];
   format: (value: number) => string;
@@ -68,6 +82,9 @@ export function PerformanceChart({
   );
   const line = points.length > 1 ? pathFor(points.map((point) => point.value), 1000, 250, min, max) : "";
   const invested = points.length > 1 ? pathFor(points.map((point) => point.invested), 1000, 250, min, max) : "";
+  const dateSpan = points.length > 1 ? new Date(points.at(-1)!.timestamp).getTime() - new Date(points[0].timestamp).getTime() : 0;
+  const includeYear = dateSpan > 300 * 24 * 60 * 60 * 1000;
+  const dateTicks = xAxisTicks(points);
 
   return (
     <section className="panel chart-panel">
@@ -102,9 +119,12 @@ export function PerformanceChart({
           <div className="chart-y-axis" aria-hidden="true">
             {yAxisValues.map((value, index) => <span key={index} style={{ top: `${index * 25}%` }}>{formatAxis(value)}</span>)}
           </div>
-          <div className="chart-x-axis">
-            <span>{new Date(points[0].timestamp).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>
-            <span>{new Date(points.at(-1)!.timestamp).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>
+          <div className="chart-x-axis" aria-label="Chart dates">
+            {dateTicks.map(({ point, position }, index) => <span
+              className={index === 0 ? "first" : index === dateTicks.length - 1 ? "last" : ""}
+              key={`${point.timestamp}-${index}`}
+              style={{ left: `${position}%` }}
+            >{formatXAxisDate(point.timestamp, includeYear)}</span>)}
           </div>
         </div>
       ) : (
