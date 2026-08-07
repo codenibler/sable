@@ -65,7 +65,9 @@ pub struct Config {
     pub net_worth_backup_interval_days: u64,
     pub configured_bitcoin_xpubs: Vec<String>,
     pub configured_ethereum_addresses: Vec<String>,
+    pub configured_staked_ethereum_addresses: Vec<String>,
     pub configured_solana_addresses: Vec<String>,
+    pub configured_staked_solana_addresses: Vec<String>,
 }
 
 impl Config {
@@ -126,7 +128,9 @@ impl Config {
                 .clamp(1, 365) as u64,
             configured_bitcoin_xpubs: configured_list("HWR_BITCOIN_XPUBS"),
             configured_ethereum_addresses: configured_list("HWR_ETHEREUM_ADDRESSES"),
+            configured_staked_ethereum_addresses: configured_list("STAKED_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
+            configured_staked_solana_addresses: configured_list("STAKED_SOLANA_ADDRESSES"),
         })
     }
 

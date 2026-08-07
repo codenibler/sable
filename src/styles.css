@@ -244,14 +244,14 @@ tbody tr:last-child td { border-bottom: 0; }
 .composition-subheading > div { display: grid; gap: 4px; }
 .composition-subheading strong { color: #aeb0aa; font-size: var(--font-small); font-weight: 600; }
 .composition-subheading small { color: #5d615d; font-size: var(--font-caption); }
-.composition-scroll { overflow-x: auto; padding: 2px 22px 0; scrollbar-color: #2a2c2a transparent; }
+.composition-scroll { overflow-x: auto; padding: 2px 22px 17px; scrollbar-color: #3c403d transparent; scrollbar-gutter: stable; }
 .composition-bars { min-width: 610px; height: 256px; display: grid; align-items: end; gap: 10px; }
 .composition-month { height: 100%; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) 36px; align-items: end; }
 .composition-stack { width: min(38px, 82%); height: 205px; justify-self: center; display: flex; flex-direction: column-reverse; overflow: hidden; border: 1px solid rgb(255 255 255 / .055); border-radius: 5px 5px 2px 2px; background: #1c1b18; box-shadow: 0 8px 28px rgb(0 0 0 / .17); }
 .composition-stack > span { min-height: 1px; display: grid; flex: 0 0 auto; place-items: center; color: rgb(255 255 255 / .84); transition: filter .16s ease; }
 .composition-stack > span:hover { filter: brightness(1.2); }
 .composition-stack > span small { font-size: .58rem; font-weight: 600; line-height: 1; text-shadow: 0 1px 3px rgb(0 0 0 / .5); }
-.composition-month > small { justify-self: center; padding-top: 9px; color: #5e6460; font-size: .64rem; white-space: nowrap; }
+.composition-month > small { justify-self: center; padding-top: 9px; color: #797e79; font-size: .64rem; white-space: nowrap; }
 .composition-legend { min-height: 61px; display: flex; flex-wrap: wrap; align-content: center; gap: 9px 17px; padding: 12px 22px 15px; border-top: 1px solid var(--line-soft); }
 .composition-legend span { display: inline-flex; align-items: center; gap: 7px; color: #696e69; font-size: var(--font-caption); }
 .composition-legend i, .composition-breakdown i { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 2px; box-shadow: 0 0 0 1px rgb(255 255 255 / .045); }

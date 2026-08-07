@@ -109,7 +109,17 @@ fn import_configured_wallets(
             &config.configured_ethereum_addresses,
             "Ethereum wallet",
         ),
+        (
+            "eth",
+            &config.configured_staked_ethereum_addresses,
+            "Staked Ethereum wallet",
+        ),
         ("sol", &config.configured_solana_addresses, "Solana wallet"),
+        (
+            "sol",
+            &config.configured_staked_solana_addresses,
+            "Staked Solana wallet",
+        ),
     ] {
         for value in values {
             let validated = providers::crypto::validate_wallet(network, value)

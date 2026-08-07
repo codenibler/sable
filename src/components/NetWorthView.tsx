@@ -6,14 +6,14 @@ import type { NetWorthEntry, SaveNetWorthInput } from "../types";
 type CategoryKey = "stocks" | "opessocius" | "crypto" | "savings" | "spending" | "receivables" | "cash" | "misc";
 
 const categories: { key: CategoryKey; label: string; color: string }[] = [
-  { key: "stocks", label: "Stocks", color: "#bda66f" },
-  { key: "opessocius", label: "Opessocius", color: "#7f8f86" },
-  { key: "crypto", label: "Crypto", color: "#8b7ca8" },
-  { key: "savings", label: "Savings", color: "#6f8d98" },
-  { key: "spending", label: "Spending", color: "#a87467" },
-  { key: "receivables", label: "Receivables", color: "#98865e" },
-  { key: "cash", label: "Cash", color: "#688074" },
-  { key: "misc", label: "Misc", color: "#716d68" },
+  { key: "stocks", label: "Stocks", color: "#d8b76b" },
+  { key: "opessocius", label: "Opessocius", color: "#76b7a8" },
+  { key: "crypto", label: "Crypto", color: "#a78bdb" },
+  { key: "savings", label: "Savings", color: "#69a9d4" },
+  { key: "spending", label: "Spending", color: "#db7f74" },
+  { key: "receivables", label: "Receivables", color: "#d69c61" },
+  { key: "cash", label: "Cash", color: "#72ad79" },
+  { key: "misc", label: "Misc", color: "#bd829b" },
 ];
 
 const day = 24 * 60 * 60 * 1000;
