@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Start Sable unless it is already running.
+#
+# Sable's read-only HTTP API lives inside the desktop process, so the phone can only reach
+# the portfolio while this is up. Hyprland runs this at login and again after every resume
+# and idle-unlock, which is why it must be idempotent: a second instance would fail to bind
+# the API port and would open a second writer against the same SQLite file.
+#
+# Focusing an already-running instance is `omarchy-launch-or-focus`'s job, not this script's.
+
+set -euo pipefail
+
+readonly APPIMAGE="${SABLE_APPIMAGE:-$HOME/Applications/Sable.AppImage}"
+readonly ENV_FILE="${SABLE_ENV_FILE:-$HOME/Projects/sable/.env}"
+
+pgrep -x sable >/dev/null 2>&1 && exit 0
+
+if [ ! -x "$APPIMAGE" ]; then
+  # Failing silently at login would surface later as the phone simply not working.
+  notify-send -u critical "Sable" "Not installed at $APPIMAGE" 2>/dev/null || true
+  echo "sable-monitor: $APPIMAGE is missing or not executable" >&2
+  exit 1
+fi
+
+# setsid detaches it from whatever fired this (Hyprland's autostart, hypridle's hook) so the
+# app outlives the hook rather than being torn down with it.
+setsid env SABLE_ENV_FILE="$ENV_FILE" "$APPIMAGE" >/dev/null 2>&1 &
