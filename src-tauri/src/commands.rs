@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex},
-    time::{Duration as StdDuration, Instant},
+    time::{Duration as StdDuration, SystemTime},
 };
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Utc};
@@ -29,7 +29,7 @@ pub struct AppState {
 }
 
 pub struct CachedDashboard {
-    computed_at: Instant,
+    computed_at: SystemTime,
     dashboard: Dashboard,
 }
 
@@ -73,14 +73,18 @@ where
     let mut cache = cache.lock().await;
     if !force
         && let Some(cached) = cache.as_ref()
-        && cached.computed_at.elapsed() < lifetime
+        // Wall clock, not `Instant`: on Linux `Instant` is CLOCK_MONOTONIC, which stops during
+        // suspend. A laptop that slept overnight would wake believing its snapshot was minutes
+        // old and keep serving pre-sleep numbers to the phone. A clock that jumped backwards
+        // yields Err, which expires the entry rather than pinning it forever.
+        && cached.computed_at.elapsed().unwrap_or(lifetime) < lifetime
     {
         return Ok(cached.dashboard.clone());
     }
     // Stamped from the moment the build starts, not when it finishes: the UI polls on the same
     // interval as `lifetime`, so charging the fan-out's own duration to the entry would push
     // expiry past the next tick and halve the effective auto-refresh rate.
-    let started = Instant::now();
+    let started = SystemTime::now();
     let dashboard = build().await?;
     *cache = Some(CachedDashboard {
         computed_at: started,
@@ -1335,7 +1339,7 @@ fn mirror_net_worth_history(state: &AppState, database: &Connection) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::{
-        accrued_monthly_winnings, cached_dashboard, crypto_invested_basis,
+        CachedDashboard, accrued_monthly_winnings, cached_dashboard, crypto_invested_basis,
         crypto_portfolio_baseline, distributed_winnings, extend_asset_history_to,
         grouped_crypto_assets, include_configured_tokens_from_portfolio_start,
         merge_historical_trading212_with_live_history, month_bounds,
@@ -1348,7 +1352,7 @@ mod tests {
     use chrono::{Local, TimeZone};
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
-        time::{Duration as StdDuration, Instant},
+        time::{Duration as StdDuration, Instant, SystemTime},
     };
 
     fn stub_dashboard(total_value: f64) -> crate::models::Dashboard {
@@ -1440,6 +1444,42 @@ mod tests {
             .await
             .unwrap();
         let rebuilt = cached_dashboard(&cache, expired, false, || async { Ok(stub_dashboard(2.0)) })
+            .await
+            .unwrap();
+        assert_eq!(rebuilt.total_value, 2.0);
+    }
+
+    /// A suspended laptop advances the wall clock while CLOCK_MONOTONIC -- what `Instant` reads
+    /// on Linux -- stands still. An `Instant`-stamped entry would therefore wake believing it
+    /// was minutes old and keep serving the phone its pre-sleep numbers.
+    #[tokio::test]
+    async fn an_entry_stale_in_wall_clock_time_is_rebuilt() {
+        let lifetime = StdDuration::from_secs(3_600);
+        let cache = tokio::sync::Mutex::new(Some(CachedDashboard {
+            computed_at: SystemTime::now() - StdDuration::from_secs(8 * 3_600),
+            dashboard: stub_dashboard(1.0),
+        }));
+
+        let rebuilt = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(2.0)) })
+            .await
+            .unwrap();
+        assert_eq!(
+            rebuilt.total_value, 2.0,
+            "an eight-hour-old snapshot must not survive a one-hour lifetime"
+        );
+    }
+
+    /// An entry stamped in the future (clock corrected backwards by NTP) must not read as
+    /// infinitely fresh, which would pin the phone to one snapshot until the app restarts.
+    #[tokio::test]
+    async fn a_backwards_clock_jump_expires_the_entry() {
+        let lifetime = StdDuration::from_secs(3_600);
+        let cache = tokio::sync::Mutex::new(Some(CachedDashboard {
+            computed_at: SystemTime::now() + StdDuration::from_secs(86_400),
+            dashboard: stub_dashboard(1.0),
+        }));
+
+        let rebuilt = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(2.0)) })
             .await
             .unwrap();
         assert_eq!(rebuilt.total_value, 2.0);
