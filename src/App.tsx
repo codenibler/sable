@@ -1,6 +1,4 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -8,8 +6,11 @@ import {
   Building2,
   ChartNoAxesCombined,
   CircleAlert,
+  CloudOff,
   HardDrive,
+  KeyRound,
   LayoutDashboard,
+  LogOut,
   Minus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -19,7 +20,16 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { api } from "./api";
+import { UnauthorizedError, api, clearCache, readCache, writeCache } from "./api";
+import {
+  clearToken,
+  controlWindow,
+  isDesktop,
+  isReadOnly,
+  onHistorySynced,
+  readToken,
+  writeToken,
+} from "./platform";
 import { PerformanceChart } from "./components/PerformanceChart";
 import { NetWorthView } from "./components/NetWorthView";
 import type { AddWalletInput, CryptoPortfolio, Dashboard, MonitoredPortfolio, MonthlyWinnings, NetWorthEntry, PeriodReturn } from "./types";
@@ -49,57 +59,124 @@ function messageOf(error: unknown) {
 
 function App() {
   const [view, setView] = useState<View>("net-worth");
-  const [dashboard, setDashboard] = useState<Dashboard | null>(null);
-  const [netWorthEntries, setNetWorthEntries] = useState<NetWorthEntry[]>([]);
+  // Hydrating from the last good payload means the phone opens with numbers rather than a
+  // spinner when the desktop is asleep.
+  const [dashboard, setDashboard] = useState<Dashboard | null>(
+    () => readCache<Dashboard>("dashboard")?.payload ?? null,
+  );
+  const [netWorthEntries, setNetWorthEntries] = useState<NetWorthEntry[]>(
+    () => readCache<NetWorthEntry[]>("net-worth")?.payload ?? [],
+  );
   const [loading, setLoading] = useState(true);
   const [netWorthLoading, setNetWorthLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [netWorthError, setNetWorthError] = useState<string | null>(null);
+  // Tracked per dataset: the dashboard and net worth load concurrently, so one settling last must
+  // not erase the other's verdict on how fresh the numbers on screen are.
+  const [dashboardStaleSince, setDashboardStaleSince] = useState<string | null>(null);
+  const [netWorthStaleSince, setNetWorthStaleSince] = useState<string | null>(null);
+  const [needsToken, setNeedsToken] = useState(() => isReadOnly && !readToken());
   const [walletModal, setWalletModal] = useState(false);
   const [winningsModal, setWinningsModal] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fontScale, setFontScale] = useState(initialFontScale);
-  const refreshing = useRef(false);
+  const refreshing = useRef<Promise<void> | null>(null);
 
-  const refresh = useCallback(async () => {
-    if (refreshing.current) return;
-    refreshing.current = true;
+  const runRefresh = useCallback(async (force: boolean) => {
     setLoading(true);
     setError(null);
     try {
-      setDashboard(await api.dashboard());
+      const next = await api.dashboard(force);
+      setDashboard(next);
+      writeCache("dashboard", next);
+      setDashboardStaleSince(null);
     } catch (caught) {
-      setError(messageOf(caught));
+      if (caught instanceof UnauthorizedError) {
+        setNeedsToken(true);
+      } else {
+        // Prefer dated numbers over an error screen: the desktop being asleep is the normal
+        // offline case, not a failure the user needs to act on.
+        const cached = readCache<Dashboard>("dashboard");
+        if (cached) {
+          setDashboard(cached.payload);
+          setDashboardStaleSince(cached.at);
+        } else {
+          setError(messageOf(caught));
+        }
+      }
     } finally {
       setLoading(false);
-      refreshing.current = false;
     }
   }, []);
+
+  const refresh = useCallback((force = false): Promise<void> => {
+    // Unforced callers (the poll, the initial load) still collapse into whatever is already in
+    // flight — one fan-out at a time. A forced caller follows a mutation, so it cannot be dropped:
+    // the in-flight call was served the pre-change snapshot, so we queue behind it and rebuild.
+    const inFlight = refreshing.current;
+    if (inFlight && !force) return inFlight;
+    const next = (inFlight ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => runRefresh(force));
+    refreshing.current = next;
+    void next.catch(() => undefined).finally(() => {
+      if (refreshing.current === next) refreshing.current = null;
+    });
+    return next;
+  }, [runRefresh]);
 
   const refreshNetWorth = useCallback(async () => {
     setNetWorthLoading(true);
     setNetWorthError(null);
     try {
-      setNetWorthEntries(await api.netWorthEntries());
+      const entries = await api.netWorthEntries();
+      setNetWorthEntries(entries);
+      writeCache("net-worth", entries);
+      setNetWorthStaleSince(null);
     } catch (caught) {
-      setNetWorthError(messageOf(caught));
+      if (caught instanceof UnauthorizedError) {
+        setNeedsToken(true);
+      } else {
+        const cached = readCache<NetWorthEntry[]>("net-worth");
+        if (cached) {
+          setNetWorthEntries(cached.payload);
+          setNetWorthStaleSince(cached.at);
+        } else {
+          setNetWorthError(messageOf(caught));
+        }
+      }
     } finally {
       setNetWorthLoading(false);
     }
   }, []);
 
   const refreshNetWorthAndDashboard = useCallback(async () => {
-    await Promise.all([refreshNetWorth(), refresh()]);
+    await Promise.all([refreshNetWorth(), refresh(true)]);
   }, [refresh, refreshNetWorth]);
 
+  const forgetToken = useCallback(() => {
+    clearToken();
+    // The cached payload is this token's data; it should not outlive the credential.
+    clearCache();
+    setDashboard(null);
+    setNetWorthEntries([]);
+    setDashboardStaleSince(null);
+    setNetWorthStaleSince(null);
+    setNeedsToken(true);
+  }, []);
+
   useEffect(() => {
+    if (needsToken) return;
     void refresh();
     void refreshNetWorth();
-  }, [refresh, refreshNetWorth]);
+  }, [needsToken, refresh, refreshNetWorth]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listen("history-synced", () => void refresh()).then((stopListening) => {
+    // Each backfill page changes the numbers the dashboard is built from, so an unforced rebuild
+    // would just replay the cached snapshot and the event would never reach the screen. The poll
+    // stays unforced because it has no such news to carry — it only exists to ride the cache.
+    void onHistorySynced(() => void refresh(true)).then((stopListening) => {
       unlisten = stopListening;
     });
     return () => unlisten?.();
@@ -142,6 +219,14 @@ function App() {
     return () => window.removeEventListener("keydown", handleFontScale);
   }, []);
 
+  // Either dataset going stale is worth the banner, and quoting the older of the two keeps it
+  // honest about the oldest numbers on screen. Both stamps are ISO, so they sort as strings.
+  const staleSince = useMemo(() => {
+    if (!dashboardStaleSince) return netWorthStaleSince;
+    if (!netWorthStaleSince) return dashboardStaleSince;
+    return netWorthStaleSince < dashboardStaleSince ? netWorthStaleSince : dashboardStaleSince;
+  }, [dashboardStaleSince, netWorthStaleSince]);
+
   const currency = dashboard?.currency ?? "EUR";
   const money = useMemo(
     () => new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: 2 }),
@@ -161,6 +246,10 @@ function App() {
     : undefined;
   const pageLabel = view === "net-worth" ? "Personal balance sheet" : selectedPortfolio?.kind === "crypto" ? "Hardware wallet" : selectedPortfolio ? "Monitored portfolio" : view === "overview" ? "Live monitor" : "On-chain portfolios";
   const pageTitle = view === "net-worth" ? "Net Worth" : selectedPortfolio?.name ?? (view === "overview" ? "Overview" : "Crypto wallets");
+
+  if (needsToken) {
+    return <TokenGate onSaved={() => setNeedsToken(false)} />;
+  }
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
@@ -182,12 +271,16 @@ function App() {
               <span className="nav-copy"><strong>{portfolio.name}</strong><small>{formatMoney(portfolio.value)}</small></span>
             </button>
           ))}
-          <p className="section-label sidebar-section-label">Manage</p>
-          <button className={view === "wallets" ? "active" : ""} onClick={() => setView("wallets")}>
-            <WalletCards size={18} /><span className="nav-copy">Crypto wallets</span>
-          </button>
+          {isDesktop && (
+            <>
+              <p className="section-label sidebar-section-label">Manage</p>
+              <button className={view === "wallets" ? "active" : ""} onClick={() => setView("wallets")}>
+                <WalletCards size={18} /><span className="nav-copy">Crypto wallets</span>
+              </button>
+            </>
+          )}
         </nav>
-        <p className="local-note"><span className="status-dot ok" /><span className="nav-copy">Local-only storage</span></p>
+        <p className="local-note"><span className="status-dot ok" /><span className="nav-copy">{isDesktop ? "Local-only storage" : "Read-only monitor"}</span></p>
       </aside>
 
       <main className="content">
@@ -198,13 +291,20 @@ function App() {
             {view === "net-worth" ? netWorthEntries.length > 0 && <p className="updated" data-tauri-drag-region>Latest snapshot {new Date(`${netWorthEntries.at(-1)!.date}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</p> : dashboard && <p className="updated" data-tauri-drag-region>Updated {new Date(dashboard.updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>}
           </div>
           <div className="topbar-actions">
-            <button className="icon-button" onClick={() => void (view === "net-worth" ? refreshNetWorthAndDashboard() : refresh())} disabled={view === "net-worth" ? netWorthLoading || loading : loading} aria-label="Refresh portfolio" title="Refresh now">
+            <button className="icon-button" onClick={() => void (view === "net-worth" ? refreshNetWorthAndDashboard() : refresh(true))} disabled={view === "net-worth" ? netWorthLoading || loading : loading} aria-label="Refresh portfolio" title="Refresh now">
               <RefreshCw size={18} className={(view === "net-worth" ? netWorthLoading || loading : loading) ? "spin" : ""} />
             </button>
-            {(view === "wallets" || selectedCryptoPortfolio) && <button className="primary-button" onClick={() => setWalletModal(true)} disabled={!dashboard?.portfolios.length}><Plus size={17} /> Add wallet</button>}
-            <WindowControls />
+            {isReadOnly && (
+              <button className="icon-button" onClick={forgetToken} aria-label="Forget token" title="Forget token">
+                <LogOut size={18} />
+              </button>
+            )}
+            {isDesktop && (view === "wallets" || selectedCryptoPortfolio) && <button className="primary-button" onClick={() => setWalletModal(true)} disabled={!dashboard?.portfolios.length}><Plus size={17} /> Add wallet</button>}
+            {isDesktop && <WindowControls />}
           </div>
         </header>
+
+        {staleSince && <StaleBanner since={staleSince} />}
 
         {view !== "net-worth" && error && (
           <div className="error-banner"><CircleAlert size={18} /><div><strong>Sable could not start</strong><p>{error}</p></div></div>
@@ -212,43 +312,114 @@ function App() {
         {view === "net-worth" && netWorthError && <div className="error-banner"><CircleAlert size={18} /><div><strong>Could not load net worth</strong><p>{netWorthError}</p></div></div>}
 
         {view === "net-worth" ? netWorthLoading && !netWorthEntries.length ? <Loading /> : <NetWorthView entries={netWorthEntries} formatMoney={formatMoney} onChanged={refreshNetWorthAndDashboard} /> : !dashboard && loading ? <Loading /> : dashboard && view === "overview" ? (
-          <Overview dashboard={dashboard} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} onAddWinnings={() => setWinningsModal(true)} />
+          <Overview dashboard={dashboard} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} onAddWinnings={isDesktop ? () => setWinningsModal(true) : undefined} />
         ) : dashboard && selectedPortfolio && selectedCryptoPortfolio ? (
           <CryptoPortfolioDetailView portfolio={selectedCryptoPortfolio} monitored={selectedPortfolio} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} />
         ) : dashboard && selectedPortfolio ? (
-          <PortfolioDetailView portfolio={selectedPortfolio} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} onEditReturn={selectedPortfolio.id === "opessocius" && dashboard.opessociusMonthlyReturn ? () => setWinningsModal(true) : undefined} />
-        ) : dashboard ? (
+          <PortfolioDetailView portfolio={selectedPortfolio} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} onEditReturn={isDesktop && selectedPortfolio.id === "opessocius" && dashboard.opessociusMonthlyReturn ? () => setWinningsModal(true) : undefined} />
+        ) : dashboard && isDesktop ? (
           <Wallets
             portfolios={dashboard.portfolios}
             formatMoney={formatMoney}
             onAddWallet={() => setWalletModal(true)}
-            onChanged={refresh}
+            onChanged={() => refresh(true)}
           />
         ) : null}
       </main>
 
-      {walletModal && dashboard && (
-        <WalletModal portfolios={dashboard.portfolios} onClose={() => setWalletModal(false)} onSaved={async () => { setWalletModal(false); await refresh(); }} />
+      {isDesktop && walletModal && dashboard && (
+        <WalletModal portfolios={dashboard.portfolios} onClose={() => setWalletModal(false)} onSaved={async () => { setWalletModal(false); await refresh(true); }} />
       )}
-      {winningsModal && dashboard?.opessociusMonthlyReturn && (
-        <WinningsModal winnings={dashboard.opessociusMonthlyReturn} currency={dashboard.currency} onClose={() => setWinningsModal(false)} onSaved={async () => { setWinningsModal(false); await refresh(); }} />
+      {isDesktop && winningsModal && dashboard?.opessociusMonthlyReturn && (
+        <WinningsModal winnings={dashboard.opessociusMonthlyReturn} currency={dashboard.currency} onClose={() => setWinningsModal(false)} onSaved={async () => { setWinningsModal(false); await refresh(true); }} />
       )}
+    </div>
+  );
+}
+
+/**
+ * The phone's only source of data is the desktop, so an unreachable desktop is an expected
+ * state rather than a fault. Showing when the numbers are from keeps that honest.
+ */
+function StaleBanner({ since }: { since: string }) {
+  const when = new Date(since);
+  const sameDay = when.toDateString() === new Date().toDateString();
+  return (
+    <div className="stale-banner">
+      <CloudOff size={17} />
+      <p>
+        Showing the last snapshot Sable could reach, from{" "}
+        <strong>
+          {sameDay
+            ? when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : when.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+        </strong>
+        . Open Sable on your desktop to refresh.
+      </p>
+    </div>
+  );
+}
+
+function TokenGate({ onSaved }: { onSaved: () => void }) {
+  const [token, setToken] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const trimmed = token.trim();
+    // Matches the minimum the Rust side refuses to start with, so a truncated paste is
+    // caught here rather than looking like a server rejection.
+    if (trimmed.length < 32) {
+      setError("That token looks too short — check the whole value was pasted.");
+      return;
+    }
+    // A stale cache belongs to whoever held the previous token.
+    clearCache();
+    writeToken(trimmed);
+    onSaved();
+  };
+
+  return (
+    <div className="token-gate">
+      <form className="token-card" onSubmit={submit}>
+        <span className="token-mark"><KeyRound size={22} /></span>
+        <h1>Connect to Sable</h1>
+        <p>Paste the <code>MOBILE_API_TOKEN</code> from your desktop <code>.env</code>. It is stored on this device only.</p>
+        <label>
+          Access token
+          <input
+            autoFocus
+            type="password"
+            value={token}
+            onChange={(event) => setToken(event.target.value)}
+            placeholder="64 hex characters"
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            required
+          />
+        </label>
+        {error && <p className="form-error">{error}</p>}
+        <button className="primary-button submit">Connect</button>
+      </form>
     </div>
   );
 }
 
 function WindowControls() {
-  const perform = (action: () => Promise<void>) => void action().catch(() => undefined);
+  const perform = (action: Parameters<typeof controlWindow>[0]) =>
+    void controlWindow(action).catch(() => undefined);
   return (
     <div className="window-controls" aria-label="Window controls">
-      <button className="window-control" onClick={() => perform(() => getCurrentWindow().minimize())} aria-label="Minimize window" title="Minimize"><Minus size={14} /></button>
-      <button className="window-control" onClick={() => perform(() => getCurrentWindow().toggleMaximize())} aria-label="Maximize window" title="Maximize"><Square size={11} /></button>
-      <button className="window-control window-close" onClick={() => perform(() => getCurrentWindow().close())} aria-label="Close window" title="Close"><X size={14} /></button>
+      <button className="window-control" onClick={() => perform("minimize")} aria-label="Minimize window" title="Minimize"><Minus size={14} /></button>
+      <button className="window-control" onClick={() => perform("toggleMaximize")} aria-label="Maximize window" title="Maximize"><Square size={11} /></button>
+      <button className="window-control window-close" onClick={() => perform("close")} aria-label="Close window" title="Close"><X size={14} /></button>
     </div>
   );
 }
 
-function Overview({ dashboard, formatMoney, formatWholeMoney, onAddWinnings }: { dashboard: Dashboard; formatMoney: (value: number) => string; formatWholeMoney: (value: number) => string; onAddWinnings: () => void }) {
+function Overview({ dashboard, formatMoney, formatWholeMoney, onAddWinnings }: { dashboard: Dashboard; formatMoney: (value: number) => string; formatWholeMoney: (value: number) => string; onAddWinnings?: () => void }) {
   const positive = dashboard.totalReturn >= 0;
   return (
     <div className="view-stack">
@@ -301,7 +472,7 @@ function Overview({ dashboard, formatMoney, formatWholeMoney, onAddWinnings }: {
             <div className="panel-heading"><div><p className="section-label">Breakdown</p><h2>Sources</h2></div></div>
             <div className="source-list">
               {dashboard.sources.map((source) => (
-                <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div className="source-copy"><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small>{source.id === "opessocius" && dashboard.opessociusMonthlyReturn && <button className="source-action" onClick={onAddWinnings}>{dashboard.opessociusMonthlyReturn.isOverride ? "Edit return" : "Override return"}</button>}</div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
+                <div className="source-item" key={source.id}><span className={`source-icon ${source.kind}`}><span className={source.connected ? "status-dot ok" : "status-dot"} />{source.kind === "brokerage" ? "T2" : source.kind === "crypto" ? "₿" : "OP"}</span><div className="source-copy"><strong>{source.name}</strong><small>{source.kind === "manual" ? source.message : source.connected ? source.kind : source.message}</small>{source.id === "opessocius" && dashboard.opessociusMonthlyReturn && onAddWinnings && <button className="source-action" onClick={onAddWinnings}>{dashboard.opessociusMonthlyReturn.isOverride ? "Edit return" : "Override return"}</button>}</div><div className="source-value"><strong>{formatMoney(source.value)}</strong><small className={source.returnValue >= 0 ? "positive-text" : "negative-text"}>{source.returnValue ? formatMoney(source.returnValue) : "—"}</small></div></div>
               ))}
             </div>
           </div>

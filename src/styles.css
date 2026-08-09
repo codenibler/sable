@@ -325,6 +325,24 @@ tbody tr:last-child td { border-bottom: 0; }
 .empty-state p { max-width: 390px; margin: 6px 0 14px; color: #636865; font-size: var(--font-caption); line-height: 1.6; }
 .text-button { border: 0; color: var(--gold); background: transparent; font-size: var(--font-caption); }
 
+/* The desktop being asleep is an expected state on mobile, so this reads as information
+   rather than as the red failure the error banner signals. */
+.stale-banner { display: flex; gap: 11px; align-items: flex-start; margin-bottom: 17px; padding: 12px 15px; border: 1px solid var(--gold-line); border-radius: 9px; color: #cdbd97; background: var(--gold-dim); }
+.stale-banner svg { flex-shrink: 0; margin-top: 1px; color: var(--gold); }
+.stale-banner p { margin: 0; font-size: var(--font-caption); line-height: 1.55; }
+.stale-banner strong { color: var(--text); font-weight: 600; }
+
+.token-gate { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: calc(24px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom)); }
+.token-card { width: min(400px, 100%); display: grid; gap: 13px; padding: 26px 24px; border: 1px solid var(--gold-line); border-radius: 12px; background: #121210; box-shadow: 0 24px 80px #000, inset 0 1px 0 rgb(179 154 99 / .035); }
+.token-mark { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--gold-line); border-radius: 11px; color: var(--gold); background: var(--gold-dim); }
+.token-card h1 { margin: 0; font-size: var(--font-heading); font-weight: 600; }
+.token-card > p { margin: -5px 0 3px; color: var(--muted); font-size: var(--font-caption); line-height: 1.6; }
+.token-card code { padding: 1px 5px; border-radius: 4px; color: #cdbd97; background: var(--gold-dim); font-family: ui-monospace, monospace; font-size: .92em; }
+.token-card label { display: grid; gap: 6px; font-size: var(--font-caption); font-weight: 600; }
+.token-card input { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--text); background: var(--surface); font-family: ui-monospace, monospace; }
+.token-card input:focus-visible { border-color: var(--gold-line); outline: none; }
+.token-card .submit { width: 100%; margin-top: 3px; }
+
 .error-banner { display: flex; gap: 11px; margin-bottom: 17px; padding: 13px 15px; border: 1px solid #553232; border-radius: 9px; color: #f2aaaa; background: #211314; }
 .error-banner strong { font-size: var(--font-small); }
 .error-banner p { margin: 3px 0 0; font-size: var(--font-caption); }
@@ -369,19 +387,25 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 
 @media (max-width: 760px) {
-  .app-shell, .app-shell.sidebar-collapsed { display: block; padding-bottom: 70px; }
-  .sidebar { position: fixed; inset: auto 0 0; width: auto; height: 62px; flex-direction: row; align-items: center; padding: 8px 14px; border: 0; border-top: 1px solid var(--line); }
-  .sidebar-collapsed .sidebar { width: auto; padding: 8px 14px; }
+  /* env(safe-area-inset-*) resolves to 0 everywhere except an installed iOS home-screen app
+     with viewport-fit=cover, where it keeps the tab bar clear of the home indicator and the
+     header clear of the notch. */
+  .app-shell, .app-shell.sidebar-collapsed { display: block; padding-bottom: calc(70px + env(safe-area-inset-bottom)); }
+  .sidebar { position: fixed; inset: auto 0 0; width: auto; height: calc(62px + env(safe-area-inset-bottom)); flex-direction: row; align-items: flex-start; padding: 8px 14px env(safe-area-inset-bottom); border: 0; border-top: 1px solid var(--line); }
+  .sidebar-collapsed .sidebar { width: auto; padding: 8px 14px env(safe-area-inset-bottom); }
   .sidebar-toggle { display: none; }
   .sidebar-status, .local-note { display: none; }
   .sidebar nav { display: flex; width: 100%; margin: 0 auto; overflow-x: auto; scrollbar-width: none; }
   .sidebar nav::-webkit-scrollbar { display: none; }
   .sidebar nav .sidebar-section-label { display: none; }
-  .sidebar nav button { gap: 7px; padding: 9px 12px; font-size: var(--font-caption); }
+  /* The bar already scrolls horizontally; without this the flex items shrink instead and
+     clip every portfolio name to its first character. */
+  .sidebar nav button { flex-shrink: 0; gap: 7px; padding: 9px 12px; font-size: var(--font-caption); white-space: nowrap; }
+  .sidebar nav button .nav-copy strong { overflow: visible; }
   .sidebar-collapsed .sidebar nav button { justify-content: flex-start; padding-inline: 12px; }
   .sidebar-collapsed .nav-copy { display: grid; }
   .portfolio-nav-item .nav-copy small { display: none; }
-  .content { padding: 22px 17px 35px; }
+  .content { padding: calc(22px + env(safe-area-inset-top)) 17px 35px; }
   .topbar { flex-wrap: wrap; align-items: flex-end; }
   .window-controls { display: none; }
   .updated { display: block; margin: 5px 0 0; }
@@ -412,7 +436,7 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 
 @media (max-width: 480px) {
-  .content { padding: 18px 12px 30px; }
+  .content { padding: calc(18px + env(safe-area-inset-top)) 12px 30px; }
   .topbar { gap: 14px; margin-bottom: 23px; }
   .topbar-actions { margin-left: auto; }
   .hero-metrics { grid-template-columns: 1fr; }

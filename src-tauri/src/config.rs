@@ -2,6 +2,7 @@ use std::{
     env,
     fmt::Write as _,
     fs,
+    net::SocketAddr,
     path::{Path, PathBuf},
     time::{Duration as StdDuration, SystemTime},
 };
@@ -69,7 +70,14 @@ pub struct Config {
     pub configured_staked_ethereum_addresses: Vec<String>,
     pub configured_solana_addresses: Vec<String>,
     pub configured_staked_solana_addresses: Vec<String>,
+    pub mobile_api_enabled: bool,
+    pub mobile_api_bind: SocketAddr,
+    pub mobile_api_token: Option<String>,
 }
+
+/// Anything shorter is guessable over a tunnel that is reachable from the public internet.
+const MOBILE_API_TOKEN_MIN_LENGTH: usize = 32;
+const DEFAULT_MOBILE_API_BIND: &str = "127.0.0.1:8787";
 
 impl Config {
     pub fn load() -> Result<Self, String> {
@@ -78,10 +86,10 @@ impl Config {
         let (net_worth_history_path, net_worth_history) =
             net_worth_history("NET_WORTH_HISTORY_FILE", config_directory)?;
 
+        let mobile_api_enabled = flag("MOBILE_API_ENABLED");
+
         Ok(Self {
-            demo_mode: optional("SABLE_DEMO_MODE").is_some_and(|value| {
-                value == "1" || value.eq_ignore_ascii_case("true")
-            }),
+            demo_mode: flag("SABLE_DEMO_MODE"),
             trading212_api_key: optional("TRADING212_API_KEY"),
             trading212_api_secret: optional("TRADING212_API_SECRET"),
             trading212_base_url: required("TRADING212_BASE_URL")?,
@@ -133,11 +141,63 @@ impl Config {
             configured_staked_ethereum_addresses: configured_list("STAKED_ETHEREUM_ADDRESSES"),
             configured_solana_addresses: configured_list("HWR_SOLANA_ADDRESSES"),
             configured_staked_solana_addresses: configured_list("STAKED_SOLANA_ADDRESSES"),
+            mobile_api_enabled,
+            mobile_api_bind: mobile_api_bind("MOBILE_API_BIND", mobile_api_enabled)?,
+            mobile_api_token: mobile_api_token("MOBILE_API_TOKEN", mobile_api_enabled)?,
         })
     }
 
     pub fn trading212_is_configured(&self) -> bool {
         self.trading212_api_key.is_some() && self.trading212_api_secret.is_some()
+    }
+
+    /// Inert defaults so tests can build an `AppState` without a `.env`. No credentials, so
+    /// nothing here reaches the network.
+    #[cfg(test)]
+    pub fn for_tests() -> Self {
+        Self {
+            demo_mode: false,
+            trading212_api_key: None,
+            trading212_api_secret: None,
+            trading212_base_url: "http://localhost/t212".to_string(),
+            coingecko_base_url: "http://localhost/coingecko".to_string(),
+            blockstream_base_url: "http://localhost/blockstream".to_string(),
+            ethereum_rpc_url: "http://localhost/eth".to_string(),
+            ethereum_explorer_api_url: "http://localhost/blockscout".to_string(),
+            ethereum_tokens: Vec::new(),
+            solana_rpc_url: "http://localhost/sol".to_string(),
+            frankfurter_base_url: "http://localhost/fx".to_string(),
+            base_currency: "EUR".to_string(),
+            snapshot_interval_minutes: 60,
+            http_timeout_seconds: 15,
+            database_filename: "sable.sqlite3".to_string(),
+            database_backup_count: 7,
+            trading212_history_max_pages: 5,
+            history_sync_interval_minutes: 1_440,
+            history_backfill_retry_seconds: 65,
+            xpub_gap_limit: 20,
+            xpub_scan_concurrency: 8,
+            xpub_max_addresses_per_branch: 500,
+            xpub_refresh_interval_minutes: 60,
+            opessocius_name: "Opessocius".to_string(),
+            opessocius_current_balance: 0.0,
+            opessocius_net_deposits: 0.0,
+            opessocius_monthly_return_rate: 0.02,
+            opessocius_return_start_month: "2026-08-01".to_string(),
+            opessocius_history: Vec::new(),
+            net_worth_history: Vec::new(),
+            net_worth_history_path: None,
+            net_worth_backup_directory: PathBuf::from("/tmp/sable-tests"),
+            net_worth_backup_interval_days: 7,
+            configured_bitcoin_xpubs: Vec::new(),
+            configured_ethereum_addresses: Vec::new(),
+            configured_staked_ethereum_addresses: Vec::new(),
+            configured_solana_addresses: Vec::new(),
+            configured_staked_solana_addresses: Vec::new(),
+            mobile_api_enabled: true,
+            mobile_api_bind: DEFAULT_MOBILE_API_BIND.parse().expect("valid bind default"),
+            mobile_api_token: None,
+        }
     }
 }
 
@@ -170,6 +230,55 @@ fn load_dotenv() -> Option<PathBuf> {
 
 fn optional(key: &str) -> Option<String> {
     env::var(key).ok().filter(|value| !value.trim().is_empty())
+}
+
+fn flag(key: &str) -> bool {
+    optional(key).is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+/// The mobile API answers with the whole financial position, so it must never listen anywhere
+/// a neighbour could reach. `tailscale serve` dials loopback from this same machine, so
+/// refusing anything else costs nothing and closes the gap where a stray bind address
+/// silently publishes the dashboard to the LAN.
+///
+/// Nothing listens when the server is disabled, so an unusable value is inert rather than
+/// wrong: rejecting it there would leave someone who set a public bind, saw the refusal and
+/// then set `MOBILE_API_ENABLED=0` unable to open the desktop window at all.
+fn mobile_api_bind(key: &str, enabled: bool) -> Result<SocketAddr, String> {
+    let default = || DEFAULT_MOBILE_API_BIND.parse().expect("valid bind default");
+    let Some(value) = optional(key) else {
+        return Ok(default());
+    };
+    let rejected = |reason: String| if enabled { Err(reason) } else { Ok(default()) };
+
+    let Ok(address) = value.trim().parse::<SocketAddr>() else {
+        return rejected(format!(
+            "{key} must be an address:port pair such as {DEFAULT_MOBILE_API_BIND}"
+        ));
+    };
+    if !address.ip().is_loopback() {
+        return rejected(format!(
+            "{key} must be a loopback address such as {DEFAULT_MOBILE_API_BIND}; \
+             publish it with `tailscale serve --bg 8787` rather than binding publicly"
+        ));
+    }
+    Ok(address)
+}
+
+fn mobile_api_token(key: &str, enabled: bool) -> Result<Option<String>, String> {
+    let token = optional(key).map(|value| value.trim().to_string());
+    if !enabled {
+        return Ok(token);
+    }
+    let token = token.ok_or_else(|| {
+        format!("{key} is required when MOBILE_API_ENABLED is set. Generate one with: openssl rand -hex 32")
+    })?;
+    if token.len() < MOBILE_API_TOKEN_MIN_LENGTH {
+        return Err(format!(
+            "{key} must be at least {MOBILE_API_TOKEN_MIN_LENGTH} characters. Generate one with: openssl rand -hex 32"
+        ));
+    }
+    Ok(Some(token))
 }
 
 fn required(key: &str) -> Result<String, String> {
@@ -606,10 +715,82 @@ mod tests {
     use std::{fs, path::Path, time::SystemTime};
 
     use super::{
-        backup_net_worth_history, ethereum_tokens, parse_net_worth_history,
-        parse_opessocius_history, resolve_local_path,
+        MOBILE_API_TOKEN_MIN_LENGTH, backup_net_worth_history, ethereum_tokens, mobile_api_bind,
+        mobile_api_token, parse_net_worth_history, parse_opessocius_history, resolve_local_path,
     };
     use crate::models::NetWorthEntry;
+
+    /// Env vars are process-global, so each case uses a unique key to stay parallel-safe.
+    fn with_var<T>(key: &str, value: Option<&str>, body: impl FnOnce() -> T) -> T {
+        match value {
+            Some(value) => unsafe { std::env::set_var(key, value) },
+            None => unsafe { std::env::remove_var(key) },
+        }
+        let outcome = body();
+        unsafe { std::env::remove_var(key) };
+        outcome
+    }
+
+    #[test]
+    fn mobile_api_token_is_optional_until_the_server_is_enabled() {
+        let key = "SABLE_TEST_TOKEN_DISABLED";
+        assert_eq!(with_var(key, None, || mobile_api_token(key, false)), Ok(None));
+        assert_eq!(
+            with_var(key, Some("short"), || mobile_api_token(key, false)),
+            Ok(Some("short".to_string()))
+        );
+    }
+
+    #[test]
+    fn mobile_api_token_rejects_missing_and_short_secrets_when_enabled() {
+        let key = "SABLE_TEST_TOKEN_ENABLED";
+        assert!(with_var(key, None, || mobile_api_token(key, true)).is_err());
+        let short = "a".repeat(MOBILE_API_TOKEN_MIN_LENGTH - 1);
+        assert!(with_var(key, Some(&short), || mobile_api_token(key, true)).is_err());
+
+        let valid = "b".repeat(MOBILE_API_TOKEN_MIN_LENGTH);
+        assert_eq!(
+            with_var(key, Some(&valid), || mobile_api_token(key, true)),
+            Ok(Some(valid))
+        );
+    }
+
+    #[test]
+    fn mobile_api_bind_defaults_to_loopback_and_refuses_public_addresses() {
+        let key = "SABLE_TEST_BIND";
+        assert_eq!(
+            with_var(key, None, || mobile_api_bind(key, true))
+                .unwrap()
+                .to_string(),
+            super::DEFAULT_MOBILE_API_BIND
+        );
+        assert_eq!(
+            with_var(key, Some("127.0.0.1:9999"), || mobile_api_bind(key, true))
+                .unwrap()
+                .to_string(),
+            "127.0.0.1:9999"
+        );
+        assert!(with_var(key, Some("[::1]:8787"), || mobile_api_bind(key, true)).is_ok());
+        assert!(with_var(key, Some("0.0.0.0:8787"), || mobile_api_bind(key, true)).is_err());
+        assert!(with_var(key, Some("192.168.1.10:8787"), || mobile_api_bind(key, true)).is_err());
+        assert!(with_var(key, Some("not-an-address"), || mobile_api_bind(key, true)).is_err());
+    }
+
+    /// Backing out of a rejected bind by disabling the server must not keep the app from
+    /// starting: nothing listens, so the unusable value falls back to the loopback default.
+    #[test]
+    fn mobile_api_bind_ignores_an_unusable_value_while_the_server_is_disabled() {
+        let key = "SABLE_TEST_BIND_DISABLED";
+        for value in ["0.0.0.0:8787", "192.168.1.10:8787", "not-an-address"] {
+            assert_eq!(
+                with_var(key, Some(value), || mobile_api_bind(key, false))
+                    .unwrap()
+                    .to_string(),
+                super::DEFAULT_MOBILE_API_BIND,
+                "{value} must fall back rather than block startup"
+            );
+        }
+    }
 
     #[test]
     fn writes_at_most_one_net_worth_backup_per_interval() {

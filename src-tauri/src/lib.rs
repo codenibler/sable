@@ -3,8 +3,9 @@ mod config;
 mod db;
 mod models;
 mod providers;
+mod server;
 
-use std::{fs, time::Duration};
+use std::{fs, sync::Arc, time::Duration};
 
 use commands::AppState;
 use tauri::{Emitter, Manager};
@@ -53,17 +54,20 @@ pub fn run() {
                 .timeout(Duration::from_secs(config.http_timeout_seconds))
                 .user_agent("Sable/0.1")
                 .build()?;
-            app.manage(AppState {
+            let state = Arc::new(AppState {
                 database: std::sync::Mutex::new(database),
                 client,
                 config,
                 history_sync: tokio::sync::Mutex::new(()),
+                dashboard_cache: tokio::sync::Mutex::new(None),
             });
+            server::spawn(app.handle().clone(), state.clone());
+            app.manage(state);
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_secs(history_backfill_retry_seconds)).await;
-                    let state = app_handle.state::<AppState>();
+                    let state = app_handle.state::<Arc<AppState>>();
                     if !state.config.trading212_is_configured() {
                         break;
                     }

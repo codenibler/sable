@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dashboard {
     pub total_value: f64,
@@ -25,7 +25,7 @@ pub struct Dashboard {
     pub notices: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonthlyWinnings {
     pub month: String,
@@ -35,7 +35,7 @@ pub struct MonthlyWinnings {
     pub default_rate_percent: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PeriodReturn {
     pub amount: f64,
@@ -52,7 +52,7 @@ pub struct DataPoint {
     pub opessocius_winnings: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitoredPortfolio {
     pub id: String,
@@ -70,7 +70,7 @@ pub struct MonitoredPortfolio {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PortfolioPeriod {
     pub month: String,
@@ -82,7 +82,7 @@ pub struct PortfolioPeriod {
     pub ending_value: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceSummary {
     pub id: String,
@@ -94,7 +94,7 @@ pub struct SourceSummary {
     pub message: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Holding {
     pub id: String,

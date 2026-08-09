@@ -1,6 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { ArrowDownRight, ArrowUpRight, ChevronDown, ChevronUp, CircleAlert, Pencil, Plus, Trash2, Trophy, X } from "lucide-react";
 import { api } from "../api";
+import { isDesktop } from "../platform";
 import type { NetWorthEntry, SaveNetWorthInput } from "../types";
 
 type CategoryKey = "trading212" | "opessocius" | "crypto" | "okx" | "trezor" | "bunq" | "t212Spending" | "ing" | "receivables" | "cash" | "misc" | "savings" | "spending";
@@ -36,7 +37,12 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
   const [actionError, setActionError] = useState<string | null>(null);
 
   const visibleCategories = useMemo(() => recordedCategories(entries), [entries]);
-  const analytics = useMemo(() => calculateAnalytics(entries, visibleCategories), [entries, visibleCategories]);
+  // Hooks run before the empty-state return below, so this must tolerate no entries at all --
+  // calculateAnalytics reads entries.at(-1) unconditionally.
+  const analytics = useMemo(
+    () => (entries.length ? calculateAnalytics(entries, visibleCategories) : null),
+    [entries, visibleCategories],
+  );
   const selected = entries.find((entry) => entry.date === selectedDate) ?? entries.at(-1);
 
   const remove = async (entry: NetWorthEntry) => {
@@ -50,8 +56,8 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
     }
   };
 
-  if (!entries.length) {
-    return <div className="view-stack"><section className="panel empty-state"><Trophy size={24} /><strong>No net worth history yet</strong><p>Add your first dated balance snapshot to start the progression chart.</p><button className="primary-button" onClick={() => setEditing("new")}><Plus size={16} /> Add snapshot</button></section>{editing && <NetWorthModal entry={editing === "new" ? undefined : editing} latest={entries.at(-1)} formatMoney={formatMoney} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await onChanged(); }} />}</div>;
+  if (!entries.length || !analytics) {
+    return <div className="view-stack"><section className="panel empty-state"><Trophy size={24} /><strong>No net worth history yet</strong><p>{isDesktop ? "Add your first dated balance snapshot to start the progression chart." : "Add your first dated balance snapshot on the desktop app to start the progression chart."}</p>{isDesktop && <button className="primary-button" onClick={() => setEditing("new")}><Plus size={16} /> Add snapshot</button>}</section>{isDesktop && editing && <NetWorthModal entry={editing === "new" ? undefined : editing} latest={entries.at(-1)} formatMoney={formatMoney} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await onChanged(); }} />}</div>;
   }
 
   const latest = entries.at(-1)!;
@@ -108,17 +114,17 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
     <p className="tracking-disclaimer">Growth includes deposits, withdrawals, and reclassification between categories; it is a balance-sheet progression, not investment return. MoM columns compare each snapshot with the prior recorded date, including multiple entries within one month.</p>
 
     <section className="panel net-worth-history-panel">
-      <div className="panel-heading"><div><p className="section-label">Ledger</p><h2>Snapshot history</h2></div><button className="primary-button" onClick={() => setEditing("new")}><Plus size={15} /> Add snapshot</button></div>
-      <div className="table-wrap"><table className="net-worth-table"><thead><tr><th>Date</th><th>Net worth</th>{visibleCategories.map((category) => <th key={category.key}>{category.label}</th>)}<th>MoM Δ</th><th>MoM (+)</th><th>MoM (−)</th><th>ATH</th><th /></tr></thead><tbody>
+      <div className="panel-heading"><div><p className="section-label">Ledger</p><h2>Snapshot history</h2></div>{isDesktop && <button className="primary-button" onClick={() => setEditing("new")}><Plus size={15} /> Add snapshot</button>}</div>
+      <div className="table-wrap"><table className="net-worth-table"><thead><tr><th>Date</th><th>Net worth</th>{visibleCategories.map((category) => <th key={category.key}>{category.label}</th>)}<th>MoM Δ</th><th>MoM (+)</th><th>MoM (−)</th><th>ATH</th>{isDesktop && <th />}</tr></thead><tbody>
         {[...entries].reverse().map((entry, reverseIndex) => {
           const index = entries.length - 1 - reverseIndex;
           const change = index ? entry.netWorth - entries[index - 1].netWorth : 0;
-          return <tr key={entry.date}><td><strong>{formatDate(entry.date)}</strong></td><td><strong>{formatMoney(entry.netWorth)}</strong></td>{visibleCategories.map((category) => <td key={category.key}>{formatMoney(entry[category.key])}</td>)}<td className={change >= 0 ? "positive-text" : "negative-text"}>{index ? formatMoney(change) : "—"}</td><td>{index && change > 0 ? formatMoney(change) : "—"}</td><td>{index && change < 0 ? formatMoney(change) : "—"}</td><td>{entry.date === analytics.high.date ? <span className="ath-badge"><Trophy size={11} /> ATH</span> : "—"}</td><td><div className="ledger-actions"><button className="row-action" onClick={() => setEditing(entry)} aria-label={`Edit ${formatDate(entry.date)}`}><Pencil size={14} /></button><button className="row-action" onClick={() => void remove(entry)} aria-label={`Remove ${formatDate(entry.date)}`}><Trash2 size={14} /></button></div></td></tr>;
+          return <tr key={entry.date}><td><strong>{formatDate(entry.date)}</strong></td><td><strong>{formatMoney(entry.netWorth)}</strong></td>{visibleCategories.map((category) => <td key={category.key}>{formatMoney(entry[category.key])}</td>)}<td className={change >= 0 ? "positive-text" : "negative-text"}>{index ? formatMoney(change) : "—"}</td><td>{index && change > 0 ? formatMoney(change) : "—"}</td><td>{index && change < 0 ? formatMoney(change) : "—"}</td><td>{entry.date === analytics.high.date ? <span className="ath-badge"><Trophy size={11} /> ATH</span> : "—"}</td>{isDesktop && <td><div className="ledger-actions"><button className="row-action" onClick={() => setEditing(entry)} aria-label={`Edit ${formatDate(entry.date)}`}><Pencil size={14} /></button><button className="row-action" onClick={() => void remove(entry)} aria-label={`Remove ${formatDate(entry.date)}`}><Trash2 size={14} /></button></div></td>}</tr>;
         })}
       </tbody></table></div>
     </section>
 
-    {editing && <NetWorthModal entry={editing === "new" ? undefined : editing} latest={latest} formatMoney={formatMoney} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await onChanged(); }} />}
+    {isDesktop && editing && <NetWorthModal entry={editing === "new" ? undefined : editing} latest={latest} formatMoney={formatMoney} onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await onChanged(); }} />}
   </div>;
 }
 

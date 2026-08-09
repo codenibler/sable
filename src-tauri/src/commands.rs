@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::Mutex,
+    sync::{Arc, Mutex},
+    time::{Duration as StdDuration, Instant},
 };
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone, Utc};
@@ -24,19 +25,89 @@ pub struct AppState {
     pub client: Client,
     pub config: Config,
     pub history_sync: tokio::sync::Mutex<()>,
+    pub dashboard_cache: tokio::sync::Mutex<Option<CachedDashboard>>,
+}
+
+pub struct CachedDashboard {
+    computed_at: Instant,
+    dashboard: Dashboard,
 }
 
 const OPESSOCIUS_SOURCE: &str = "opessocius";
 
 #[tauri::command]
-pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, String> {
+pub async fn get_dashboard(
+    state: State<'_, Arc<AppState>>,
+    force: Option<bool>,
+) -> Result<Dashboard, String> {
+    dashboard(state.inner(), force.unwrap_or(false)).await
+}
+
+/// Building a dashboard fans out to Trading 212, CoinGecko, Blockstream, the Ethereum and
+/// Solana RPCs and Blockscout. Trading 212 answers 429 when called too often, and that budget
+/// is now shared between the desktop window's refresh timer and any phone polling the HTTP
+/// API. Callers queue on this mutex rather than each starting their own fan-out, so a burst
+/// costs one round of upstream calls and everyone gets the same answer.
+pub async fn dashboard(state: &AppState, force: bool) -> Result<Dashboard, String> {
+    cached_dashboard(
+        &state.dashboard_cache,
+        cache_lifetime(&state.config),
+        force,
+        || build_dashboard(state),
+    )
+    .await
+}
+
+/// Holding the lock across the build is what makes this single-flight: a second caller blocks
+/// until the first stores its result, then finds it fresh and returns the same snapshot.
+async fn cached_dashboard<F, Fut>(
+    cache: &tokio::sync::Mutex<Option<CachedDashboard>>,
+    lifetime: StdDuration,
+    force: bool,
+    build: F,
+) -> Result<Dashboard, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<Dashboard, String>>,
+{
+    let mut cache = cache.lock().await;
+    if !force
+        && let Some(cached) = cache.as_ref()
+        && cached.computed_at.elapsed() < lifetime
+    {
+        return Ok(cached.dashboard.clone());
+    }
+    // Stamped from the moment the build starts, not when it finishes: the UI polls on the same
+    // interval as `lifetime`, so charging the fan-out's own duration to the entry would push
+    // expiry past the next tick and halve the effective auto-refresh rate.
+    let started = Instant::now();
+    let dashboard = build().await?;
+    *cache = Some(CachedDashboard {
+        computed_at: started,
+        dashboard: dashboard.clone(),
+    });
+    Ok(dashboard)
+}
+
+/// Matches the cadence the UI already refreshes on, so the cache never withholds a snapshot
+/// the user would otherwise have seen.
+fn cache_lifetime(config: &Config) -> StdDuration {
+    StdDuration::from_secs(config.snapshot_interval_minutes.max(1) as u64 * 60)
+}
+
+pub fn net_worth_entries(state: &AppState) -> Result<Vec<NetWorthEntry>, String> {
+    let database = state.database.lock().map_err(|_| "Database lock failed")?;
+    db::list_net_worth_entries(&database)
+}
+
+async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
     let mut portfolios = {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
         db::list_portfolios(&database)?
     };
 
     let history_sync_error = if state.config.trading212_is_configured() {
-        sync_trading_history(&state).await.err()
+        sync_trading_history(state).await.err()
     } else {
         None
     };
@@ -1161,7 +1232,7 @@ fn accrued_monthly_winnings(month: &str, amount: f64, at: DateTime<Utc>) -> Resu
 
 #[tauri::command]
 pub fn set_opessocius_monthly_return(
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     amount: f64,
 ) -> Result<(), String> {
     if !amount.is_finite() {
@@ -1176,13 +1247,13 @@ pub fn set_opessocius_monthly_return(
 }
 
 #[tauri::command]
-pub fn list_crypto_portfolios(state: State<'_, AppState>) -> Result<Vec<CryptoPortfolio>, String> {
+pub fn list_crypto_portfolios(state: State<'_, Arc<AppState>>) -> Result<Vec<CryptoPortfolio>, String> {
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
     db::list_portfolios(&database)
 }
 
 #[tauri::command]
-pub fn add_wallet(state: State<'_, AppState>, input: AddWalletInput) -> Result<i64, String> {
+pub fn add_wallet(state: State<'_, Arc<AppState>>, input: AddWalletInput) -> Result<i64, String> {
     let validated = crypto::validate_wallet(&input.network, &input.address)?;
     let label = if input.label.trim().is_empty() {
         if validated.wallet_type == "xpub" {
@@ -1208,20 +1279,20 @@ pub fn add_wallet(state: State<'_, AppState>, input: AddWalletInput) -> Result<i
 }
 
 #[tauri::command]
-pub fn remove_wallet(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+pub fn remove_wallet(state: State<'_, Arc<AppState>>, id: i64) -> Result<(), String> {
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
     db::remove_wallet(&database, id)
 }
 
 #[tauri::command]
-pub fn list_net_worth_entries(state: State<'_, AppState>) -> Result<Vec<NetWorthEntry>, String> {
+pub fn list_net_worth_entries(state: State<'_, Arc<AppState>>) -> Result<Vec<NetWorthEntry>, String> {
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
     db::list_net_worth_entries(&database)
 }
 
 #[tauri::command]
 pub fn save_net_worth_entry(
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     input: SaveNetWorthInput,
 ) -> Result<(), String> {
     let parsed_date = NaiveDate::parse_from_str(&input.date, "%Y-%m-%d")
@@ -1236,16 +1307,16 @@ pub fn save_net_worth_entry(
     }
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
     db::save_net_worth_entry(&database, &input)?;
-    mirror_net_worth_history(&state, &database)
+    mirror_net_worth_history(state.inner(), &database)
 }
 
 #[tauri::command]
-pub fn remove_net_worth_entry(state: State<'_, AppState>, date: String) -> Result<(), String> {
+pub fn remove_net_worth_entry(state: State<'_, Arc<AppState>>, date: String) -> Result<(), String> {
     NaiveDate::parse_from_str(&date, "%Y-%m-%d")
         .map_err(|_| "Net worth date must use YYYY-MM-DD format".to_string())?;
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
     db::remove_net_worth_entry(&database, &date)?;
-    mirror_net_worth_history(&state, &database)
+    mirror_net_worth_history(state.inner(), &database)
 }
 
 fn mirror_net_worth_history(state: &AppState, database: &Connection) -> Result<(), String> {
@@ -1264,9 +1335,9 @@ fn mirror_net_worth_history(state: &AppState, database: &Connection) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::{
-        accrued_monthly_winnings, crypto_invested_basis, crypto_portfolio_baseline,
-        distributed_winnings, extend_asset_history_to, grouped_crypto_assets,
-        include_configured_tokens_from_portfolio_start,
+        accrued_monthly_winnings, cached_dashboard, crypto_invested_basis,
+        crypto_portfolio_baseline, distributed_winnings, extend_asset_history_to,
+        grouped_crypto_assets, include_configured_tokens_from_portfolio_start,
         merge_historical_trading212_with_live_history, month_bounds,
         planned_default_monthly_returns, rebuild_cash_position_history, return_month,
     };
@@ -1275,6 +1346,153 @@ mod tests {
         models::{CryptoAsset, CryptoPortfolio, DataPoint, Wallet, WalletAsset},
     };
     use chrono::{Local, TimeZone};
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::{Duration as StdDuration, Instant},
+    };
+
+    fn stub_dashboard(total_value: f64) -> crate::models::Dashboard {
+        crate::models::Dashboard {
+            total_value,
+            invested_value: 0.0,
+            cash_value: 0.0,
+            total_return: 0.0,
+            return_percent: 0.0,
+            monthly_return: crate::models::PeriodReturn {
+                amount: 0.0,
+                percent: 0.0,
+            },
+            yearly_return: crate::models::PeriodReturn {
+                amount: 0.0,
+                percent: 0.0,
+            },
+            opessocius_monthly_return: None,
+            net_contributions: 0.0,
+            history_event_count: 0,
+            history_backfill_complete: false,
+            refresh_interval_minutes: 60,
+            currency: "EUR".to_string(),
+            updated_at: "2026-08-09T00:00:00Z".to_string(),
+            history: Vec::new(),
+            sources: Vec::new(),
+            holdings: Vec::new(),
+            portfolios: Vec::new(),
+            monitored_portfolios: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    /// The desktop timer and any phone polling the HTTP API share one Trading 212 rate-limit
+    /// budget, so overlapping requests must collapse into a single upstream fan-out.
+    #[tokio::test]
+    async fn concurrent_dashboard_requests_cost_one_build() {
+        let cache = tokio::sync::Mutex::new(None);
+        let builds = AtomicUsize::new(0);
+        let build = || async {
+            builds.fetch_add(1, Ordering::SeqCst);
+            // Yield so a naive implementation would let a second caller start its own build.
+            tokio::task::yield_now().await;
+            Ok(stub_dashboard(100.0))
+        };
+
+        let lifetime = StdDuration::from_secs(3_600);
+        let (first, second, third) = tokio::join!(
+            cached_dashboard(&cache, lifetime, false, build),
+            cached_dashboard(&cache, lifetime, false, build),
+            cached_dashboard(&cache, lifetime, false, build),
+        );
+
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        assert_eq!(first.unwrap().total_value, 100.0);
+        assert_eq!(second.unwrap().total_value, 100.0);
+        assert_eq!(third.unwrap().total_value, 100.0);
+    }
+
+    #[tokio::test]
+    async fn a_forced_refresh_bypasses_a_still_fresh_cache() {
+        let cache = tokio::sync::Mutex::new(None);
+        let lifetime = StdDuration::from_secs(3_600);
+
+        let first = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(1.0)) })
+            .await
+            .unwrap();
+        assert_eq!(first.total_value, 1.0);
+
+        // Unforced: the fresh entry wins and the builder never runs.
+        let cached = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(2.0)) })
+            .await
+            .unwrap();
+        assert_eq!(cached.total_value, 1.0);
+
+        // Forced, as the desktop refresh button does.
+        let forced = cached_dashboard(&cache, lifetime, true, || async { Ok(stub_dashboard(3.0)) })
+            .await
+            .unwrap();
+        assert_eq!(forced.total_value, 3.0);
+    }
+
+    #[tokio::test]
+    async fn an_expired_entry_is_rebuilt() {
+        let cache = tokio::sync::Mutex::new(None);
+        let expired = StdDuration::from_secs(0);
+
+        cached_dashboard(&cache, expired, false, || async { Ok(stub_dashboard(1.0)) })
+            .await
+            .unwrap();
+        let rebuilt = cached_dashboard(&cache, expired, false, || async { Ok(stub_dashboard(2.0)) })
+            .await
+            .unwrap();
+        assert_eq!(rebuilt.total_value, 2.0);
+    }
+
+    /// The UI polls on the same interval the cache lives for, so an entry stamped at build
+    /// *completion* would still be fresh at the next tick and only refresh every other one.
+    #[tokio::test]
+    async fn a_slow_build_does_not_push_expiry_past_its_own_start() {
+        let cache = tokio::sync::Mutex::new(None);
+        let build_duration = StdDuration::from_millis(30);
+        let lifetime = StdDuration::from_millis(60);
+
+        let start = Instant::now();
+        cached_dashboard(&cache, lifetime, false, || async {
+            tokio::time::sleep(build_duration).await;
+            Ok(stub_dashboard(1.0))
+        })
+        .await
+        .unwrap();
+
+        // Wait out the lifetime measured from when the build began, as the polling UI does.
+        tokio::time::sleep(lifetime.saturating_sub(start.elapsed()) + StdDuration::from_millis(5))
+            .await;
+        let rebuilt = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(2.0)) })
+            .await
+            .unwrap();
+        assert_eq!(
+            rebuilt.total_value, 2.0,
+            "the entry must expire a lifetime after the build started, not after it finished"
+        );
+    }
+
+    /// A failed build must not poison the cache with an error or evict a good snapshot.
+    #[tokio::test]
+    async fn a_failed_build_leaves_the_previous_snapshot_intact() {
+        let cache = tokio::sync::Mutex::new(None);
+        let lifetime = StdDuration::from_secs(3_600);
+
+        cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(7.0)) })
+            .await
+            .unwrap();
+        let failure = cached_dashboard(&cache, lifetime, true, || async {
+            Err("Trading 212 is rate limiting requests".to_string())
+        })
+        .await;
+        assert!(failure.is_err());
+
+        let recovered = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(9.0)) })
+            .await
+            .unwrap();
+        assert_eq!(recovered.total_value, 7.0, "the good snapshot must survive");
+    }
 
     #[test]
     fn identifies_the_previous_calendar_month() {
