@@ -38,6 +38,7 @@ pub struct Config {
     pub coingecko_base_url: String,
     pub blockstream_base_url: String,
     pub ethereum_rpc_url: String,
+    pub ethereum_explorer_api_url: String,
     pub ethereum_tokens: Vec<EthereumTokenConfig>,
     pub solana_rpc_url: String,
     pub frankfurter_base_url: String,
@@ -87,6 +88,7 @@ impl Config {
             coingecko_base_url: required("COINGECKO_BASE_URL")?,
             blockstream_base_url: required("BLOCKSTREAM_BASE_URL")?,
             ethereum_rpc_url: required("ETHEREUM_RPC_URL")?,
+            ethereum_explorer_api_url: required("ETHEREUM_EXPLORER_API_URL")?,
             ethereum_tokens: ethereum_tokens("ETHEREUM_ERC20_TOKENS")?,
             solana_rpc_url: required("SOLANA_RPC_URL")?,
             frankfurter_base_url: required("FRANKFURTER_BASE_URL")?,
@@ -256,25 +258,15 @@ pub fn write_net_worth_history(path: &Path, entries: &[NetWorthEntry]) -> Result
         fs::create_dir_all(parent)
             .map_err(|error| format!("Could not prepare private net worth history: {error}"))?;
     }
-    let mut contents = String::from(
-        "date,net_worth,stocks,opessocius,crypto,savings,spending,receivables,cash,misc\n",
-    );
+    let mut contents = format!("date,net_worth,{}\n", NET_WORTH_COLUMNS.join(","));
     for entry in entries {
-        writeln!(
-            contents,
-            "{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2}",
-            entry.date,
-            entry.net_worth,
-            entry.stocks,
-            entry.opessocius,
-            entry.crypto,
-            entry.savings,
-            entry.spending,
-            entry.receivables,
-            entry.cash,
-            entry.misc,
-        )
-        .map_err(|error| format!("Could not format private net worth history: {error}"))?;
+        write!(contents, "{},{:.2}", entry.date, entry.net_worth)
+            .map_err(|error| format!("Could not format private net worth history: {error}"))?;
+        for amount in net_worth_amounts(entry) {
+            write!(contents, ",{amount:.2}")
+                .map_err(|error| format!("Could not format private net worth history: {error}"))?;
+        }
+        contents.push('\n');
     }
     let temporary_path = path.with_extension("csv.tmp");
     fs::write(&temporary_path, contents)
@@ -371,31 +363,100 @@ fn harden_private_directory(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Category columns in the order they are written, matching `net_worth_amounts`.
+const NET_WORTH_COLUMNS: [&str; 13] = [
+    "trading212",
+    "opessocius",
+    "crypto",
+    "okx",
+    "trezor",
+    "bunq",
+    "t212_spending",
+    "ing",
+    "receivables",
+    "cash",
+    "misc",
+    "savings",
+    "spending",
+];
+
+fn net_worth_amounts(entry: &NetWorthEntry) -> [f64; 13] {
+    [
+        entry.trading212,
+        entry.opessocius,
+        entry.crypto,
+        entry.okx,
+        entry.trezor,
+        entry.bunq,
+        entry.t212_spending,
+        entry.ing,
+        entry.receivables,
+        entry.cash,
+        entry.misc,
+        entry.savings,
+        entry.spending,
+    ]
+}
+
 fn parse_net_worth_history(key: &str, contents: &str) -> Result<Vec<SaveNetWorthInput>, String> {
+    let mut lines = contents.lines().enumerate();
+    let Some((_, header_line)) = lines.next() else {
+        return Ok(Vec::new());
+    };
+    // Columns are located by name so histories written before a category was renamed or
+    // added still import: "stocks" is the former name of the Trading 212 column.
+    let header = header_line.split(',').map(str::trim).collect::<Vec<_>>();
+    if header.first() != Some(&"date") || header.get(1) != Some(&"net_worth") {
+        return Err(format!("{key} must start with date,net_worth columns"));
+    }
+    for column in &header[2..] {
+        if !NET_WORTH_COLUMNS.contains(column) && *column != "stocks" {
+            return Err(format!("{key} has an unknown column {column}"));
+        }
+    }
+    let column_index = |name: &str| {
+        header
+            .iter()
+            .position(|column| *column == name || (name == "trading212" && *column == "stocks"))
+    };
+
     let mut entries = Vec::new();
-    for (index, line) in contents.lines().enumerate().skip(1) {
+    for (index, line) in lines {
         if line.trim().is_empty() {
             continue;
         }
         let fields = line.split(',').map(str::trim).collect::<Vec<_>>();
-        if fields.len() != 10 {
-            return Err(format!("{key} row {} must contain 10 columns", index + 1));
+        if fields.len() != header.len() {
+            return Err(format!(
+                "{key} row {} must contain {} columns",
+                index + 1,
+                header.len()
+            ));
         }
         let date = NaiveDate::parse_from_str(fields[0], "%Y-%m-%d")
             .map_err(|_| format!("{key} row {} has an invalid date", index + 1))?
             .format("%Y-%m-%d")
             .to_string();
         let declared_total = non_negative_csv_value(key, "net_worth", fields[1], index + 1)?;
+        let amount = |column: &str| match column_index(column) {
+            Some(position) => non_negative_csv_value(key, column, fields[position], index + 1),
+            None => Ok(0.0),
+        };
         let entry = SaveNetWorthInput {
             date,
-            stocks: non_negative_csv_value(key, "stocks", fields[2], index + 1)?,
-            opessocius: non_negative_csv_value(key, "opessocius", fields[3], index + 1)?,
-            crypto: non_negative_csv_value(key, "crypto", fields[4], index + 1)?,
-            savings: non_negative_csv_value(key, "savings", fields[5], index + 1)?,
-            spending: non_negative_csv_value(key, "spending", fields[6], index + 1)?,
-            receivables: non_negative_csv_value(key, "receivables", fields[7], index + 1)?,
-            cash: non_negative_csv_value(key, "cash", fields[8], index + 1)?,
-            misc: non_negative_csv_value(key, "misc", fields[9], index + 1)?,
+            trading212: amount("trading212")?,
+            opessocius: amount("opessocius")?,
+            crypto: amount("crypto")?,
+            okx: amount("okx")?,
+            trezor: amount("trezor")?,
+            bunq: amount("bunq")?,
+            t212_spending: amount("t212_spending")?,
+            ing: amount("ing")?,
+            receivables: amount("receivables")?,
+            cash: amount("cash")?,
+            misc: amount("misc")?,
+            savings: amount("savings")?,
+            spending: amount("spending")?,
         };
         if (entry.net_worth() - declared_total).abs() > 0.02 {
             return Err(format!(
@@ -560,14 +621,19 @@ mod tests {
         let entry = NetWorthEntry {
             date: "2026-07-27".to_string(),
             net_worth: 20_364.31,
-            stocks: 10_919.67,
+            trading212: 10_919.67,
             opessocius: 8_028.04,
             crypto: 0.0,
-            savings: 125.0,
-            spending: 217.85,
+            okx: 0.0,
+            trezor: 0.0,
+            bunq: 0.0,
+            t212_spending: 0.0,
+            ing: 0.0,
             receivables: 1_033.75,
             cash: 40.0,
             misc: 0.0,
+            savings: 125.0,
+            spending: 217.85,
         };
 
         let backup = backup_net_worth_history(&directory, &[entry], 7)
@@ -588,13 +654,28 @@ mod tests {
     fn parses_private_net_worth_history_and_validates_the_total() {
         let entries = parse_net_worth_history(
             "NET_WORTH_HISTORY_FILE",
-            "date,net_worth,stocks,opessocius,crypto,savings,spending,receivables,cash,misc\n\
-             2026-07-27,20364.31,10919.67,8028.04,0,125,217.85,1033.75,40,0\n",
+            "date,net_worth,trading212,opessocius,crypto,okx,trezor,bunq,t212_spending,ing,\
+             receivables,cash,misc,savings,spending\n\
+             2026-07-27,20364.31,10919.67,8028.04,0,0,0,0,0,0,1033.75,40,0,125,217.85\n",
         )
         .unwrap();
         assert_eq!(entries.len(), 1);
         assert!((entries[0].net_worth() - 20_364.31).abs() < 0.001);
         assert_eq!(entries[0].receivables, 1_033.75);
+    }
+
+    #[test]
+    fn reads_stock_balances_from_a_history_written_before_the_rename() {
+        let entries = parse_net_worth_history(
+            "NET_WORTH_HISTORY_FILE",
+            "date,net_worth,stocks,opessocius,crypto,savings,spending,receivables,cash,misc\n\
+             2026-07-27,20364.31,10919.67,8028.04,0,125,217.85,1033.75,40,0\n",
+        )
+        .unwrap();
+        assert_eq!(entries[0].trading212, 10_919.67);
+        assert_eq!(entries[0].savings, 125.0);
+        assert_eq!(entries[0].okx, 0.0);
+        assert!((entries[0].net_worth() - 20_364.31).abs() < 0.001);
     }
 
     #[test]

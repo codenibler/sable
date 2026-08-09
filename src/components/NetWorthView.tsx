@@ -3,18 +3,28 @@ import { ArrowDownRight, ArrowUpRight, ChevronDown, ChevronUp, CircleAlert, Penc
 import { api } from "../api";
 import type { NetWorthEntry, SaveNetWorthInput } from "../types";
 
-type CategoryKey = "stocks" | "opessocius" | "crypto" | "savings" | "spending" | "receivables" | "cash" | "misc";
+type CategoryKey = "trading212" | "opessocius" | "crypto" | "okx" | "trezor" | "bunq" | "t212Spending" | "ing" | "receivables" | "cash" | "misc" | "savings" | "spending";
 
-const categories: { key: CategoryKey; label: string; color: string }[] = [
-  { key: "stocks", label: "Stocks", color: "#d8b76b" },
+type Category = { key: CategoryKey; label: string; color: string; retired?: boolean };
+
+const categories: Category[] = [
+  { key: "trading212", label: "Trading 212", color: "#d8b76b" },
+  { key: "t212Spending", label: "T212 Spending", color: "#b8964f" },
   { key: "opessocius", label: "Opessocius", color: "#76b7a8" },
   { key: "crypto", label: "Crypto", color: "#a78bdb" },
-  { key: "savings", label: "Savings", color: "#69a9d4" },
-  { key: "spending", label: "Spending", color: "#db7f74" },
+  { key: "okx", label: "OKX", color: "#7f8fc9" },
+  { key: "trezor", label: "Trezor", color: "#6bb8c4" },
+  { key: "bunq", label: "Bunq", color: "#9fc06a" },
+  { key: "ing", label: "ING", color: "#c9713f" },
   { key: "receivables", label: "Receivables", color: "#d69c61" },
   { key: "cash", label: "Cash", color: "#72ad79" },
   { key: "misc", label: "Misc", color: "#bd829b" },
+  // Balances now live in their own bank category; older snapshots keep these until edited away.
+  { key: "savings", label: "Savings", color: "#69a9d4", retired: true },
+  { key: "spending", label: "Spending", color: "#db7f74", retired: true },
 ];
+
+const recordedCategories = (entries: NetWorthEntry[]) => categories.filter((category) => !category.retired || entries.some((entry) => entry[category.key] > 0));
 
 const day = 24 * 60 * 60 * 1000;
 const dateValue = (date: string) => new Date(`${date}T00:00:00`).getTime();
@@ -25,7 +35,8 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
   const [selectedDate, setSelectedDate] = useState(entries.at(-1)?.date ?? "");
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const analytics = useMemo(() => calculateAnalytics(entries), [entries]);
+  const visibleCategories = useMemo(() => recordedCategories(entries), [entries]);
+  const analytics = useMemo(() => calculateAnalytics(entries, visibleCategories), [entries, visibleCategories]);
   const selected = entries.find((entry) => entry.date === selectedDate) ?? entries.at(-1);
 
   const remove = async (entry: NetWorthEntry) => {
@@ -93,16 +104,16 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
         </div>
       </div>
     </section>
-    <CompositionCharts entries={entries} latest={latest} formatMoney={formatMoney} />
+    <CompositionCharts entries={entries} latest={latest} categories={visibleCategories} formatMoney={formatMoney} />
     <p className="tracking-disclaimer">Growth includes deposits, withdrawals, and reclassification between categories; it is a balance-sheet progression, not investment return. MoM columns compare each snapshot with the prior recorded date, including multiple entries within one month.</p>
 
     <section className="panel net-worth-history-panel">
       <div className="panel-heading"><div><p className="section-label">Ledger</p><h2>Snapshot history</h2></div><button className="primary-button" onClick={() => setEditing("new")}><Plus size={15} /> Add snapshot</button></div>
-      <div className="table-wrap"><table className="net-worth-table"><thead><tr><th>Date</th><th>Net worth</th>{categories.map((category) => <th key={category.key}>{category.label}</th>)}<th>MoM Δ</th><th>MoM (+)</th><th>MoM (−)</th><th>ATH</th><th /></tr></thead><tbody>
+      <div className="table-wrap"><table className="net-worth-table"><thead><tr><th>Date</th><th>Net worth</th>{visibleCategories.map((category) => <th key={category.key}>{category.label}</th>)}<th>MoM Δ</th><th>MoM (+)</th><th>MoM (−)</th><th>ATH</th><th /></tr></thead><tbody>
         {[...entries].reverse().map((entry, reverseIndex) => {
           const index = entries.length - 1 - reverseIndex;
           const change = index ? entry.netWorth - entries[index - 1].netWorth : 0;
-          return <tr key={entry.date}><td><strong>{formatDate(entry.date)}</strong></td><td><strong>{formatMoney(entry.netWorth)}</strong></td>{categories.map((category) => <td key={category.key}>{formatMoney(entry[category.key])}</td>)}<td className={change >= 0 ? "positive-text" : "negative-text"}>{index ? formatMoney(change) : "—"}</td><td>{index && change > 0 ? formatMoney(change) : "—"}</td><td>{index && change < 0 ? formatMoney(change) : "—"}</td><td>{entry.date === analytics.high.date ? <span className="ath-badge"><Trophy size={11} /> ATH</span> : "—"}</td><td><div className="ledger-actions"><button className="row-action" onClick={() => setEditing(entry)} aria-label={`Edit ${formatDate(entry.date)}`}><Pencil size={14} /></button><button className="row-action" onClick={() => void remove(entry)} aria-label={`Remove ${formatDate(entry.date)}`}><Trash2 size={14} /></button></div></td></tr>;
+          return <tr key={entry.date}><td><strong>{formatDate(entry.date)}</strong></td><td><strong>{formatMoney(entry.netWorth)}</strong></td>{visibleCategories.map((category) => <td key={category.key}>{formatMoney(entry[category.key])}</td>)}<td className={change >= 0 ? "positive-text" : "negative-text"}>{index ? formatMoney(change) : "—"}</td><td>{index && change > 0 ? formatMoney(change) : "—"}</td><td>{index && change < 0 ? formatMoney(change) : "—"}</td><td>{entry.date === analytics.high.date ? <span className="ath-badge"><Trophy size={11} /> ATH</span> : "—"}</td><td><div className="ledger-actions"><button className="row-action" onClick={() => setEditing(entry)} aria-label={`Edit ${formatDate(entry.date)}`}><Pencil size={14} /></button><button className="row-action" onClick={() => void remove(entry)} aria-label={`Remove ${formatDate(entry.date)}`}><Trash2 size={14} /></button></div></td></tr>;
         })}
       </tbody></table></div>
     </section>
@@ -119,7 +130,7 @@ function Insight({ label, value, note, positive }: { label: string; value: strin
   return <div className="growth-insight"><span>{label}</span><strong className={positive ? "positive-text" : "negative-text"}>{value}</strong><small>{note}</small></div>;
 }
 
-function CompositionCharts({ entries, latest, formatMoney }: { entries: NetWorthEntry[]; latest: NetWorthEntry; formatMoney: (value: number) => string }) {
+function CompositionCharts({ entries, latest, categories, formatMoney }: { entries: NetWorthEntry[]; latest: NetWorthEntry; categories: Category[]; formatMoney: (value: number) => string }) {
   const monthlyEntries = useMemo(() => {
     const byMonth = new Map<string, NetWorthEntry>();
     entries.forEach((entry) => byMonth.set(entry.date.slice(0, 7), entry));
@@ -179,8 +190,11 @@ function CompositionCharts({ entries, latest, formatMoney }: { entries: NetWorth
 
 function NetWorthModal({ entry, latest, formatMoney, onClose, onSaved }: { entry?: NetWorthEntry; latest?: NetWorthEntry; formatMoney: (value: number) => string; onClose: () => void; onSaved: () => Promise<void> }) {
   const starting = entry ?? latest;
+  // Retired categories stay editable on the snapshots that still hold a balance, but never
+  // carry forward into a new one.
+  const fields = categories.filter((category) => !category.retired || (entry?.[category.key] ?? 0) > 0);
   const [date, setDate] = useState(entry?.date ?? new Date().toISOString().slice(0, 10));
-  const [values, setValues] = useState<Record<CategoryKey, string>>(() => Object.fromEntries(categories.map(({ key }) => [key, String(starting?.[key] ?? 0)])) as Record<CategoryKey, string>);
+  const [values, setValues] = useState<Record<CategoryKey, string>>(() => Object.fromEntries(categories.map(({ key, retired }) => [key, String(retired && !entry ? 0 : starting?.[key] ?? 0)])) as Record<CategoryKey, string>);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const total = categories.reduce((sum, { key }) => sum + (Number(values[key]) || 0), 0);
@@ -210,13 +224,13 @@ function NetWorthModal({ entry, latest, formatMoney, onClose, onSaved }: { entry
 
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="modal net-worth-modal" role="dialog" aria-modal="true" aria-labelledby="net-worth-modal-title"><div className="modal-heading"><div><h2 id="net-worth-modal-title">{entry ? "Edit snapshot" : "Add net worth snapshot"}</h2><p>Enter each balance category. Sable calculates the total and progression automatically.</p></div><button className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div><form onSubmit={submit}>
     <label>Date<input autoFocus type="date" value={date} disabled={Boolean(entry)} onChange={(event) => setDate(event.target.value)} required /></label>
-    <div className="net-worth-fields">{categories.map(({ key, label }) => <label key={key}>{label} (€)<span className="number-input"><input type="number" min="0" step="0.01" inputMode="decimal" value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })} required /><span className="number-stepper"><button type="button" onClick={() => adjustValue(key, 1)} aria-label={`Increase ${label}`}><ChevronUp size={12} /></button><button type="button" onClick={() => adjustValue(key, -1)} aria-label={`Decrease ${label}`}><ChevronDown size={12} /></button></span></span></label>)}</div>
+    <div className="net-worth-fields">{fields.map(({ key, label }) => <label key={key}>{label} (€)<span className="number-input"><input type="number" min="0" step="0.01" inputMode="decimal" value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })} required /><span className="number-stepper"><button type="button" onClick={() => adjustValue(key, 1)} aria-label={`Increase ${label}`}><ChevronUp size={12} /></button><button type="button" onClick={() => adjustValue(key, -1)} aria-label={`Decrease ${label}`}><ChevronDown size={12} /></button></span></span></label>)}</div>
     <div className="net-worth-total-preview"><span>Calculated net worth</span><strong>{formatMoney(total)}</strong></div>
     {error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Saving…" : entry ? "Save changes" : "Add snapshot"}</button>
   </form></div></div>;
 }
 
-function calculateAnalytics(entries: NetWorthEntry[]) {
+function calculateAnalytics(entries: NetWorthEntry[], categories: Category[]) {
   const latest = entries.at(-1)!;
   const previous = entries.at(-2);
   const first = entries[0];

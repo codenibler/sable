@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -10,6 +10,13 @@ use crate::{
     models::{Wallet, WalletAsset},
     providers::bitcoin_xpub,
 };
+
+const EVERSTAKE_STAKE_ADDED_TOPIC: &str =
+    "0x7d194e8dc0f902cdc51bde00649039561dbd0b01574d671bad333436fdac7692";
+const EVERSTAKE_UNSTAKE_TOPIC: &str =
+    "0x0750a71dce555de583ab0225a108df42b9402d22123d7cc9cd95793e43e7db0e";
+const EVERSTAKE_STAKE_CANCELED_TOPIC: &str =
+    "0x54e9536cd034f3df0a8d955ac91a16ad1658352edd5d61d9d7c98616a80ad73f";
 
 pub async fn prices(client: &Client, config: &Config) -> Result<AssetPrices, String> {
     let mut ids = vec![
@@ -111,6 +118,10 @@ pub async fn hydrate_wallet(
             }
         }
     }
+    if wallet.network == "eth" && wallet.wallet_type == "everstake" {
+        hydrate_everstake_wallet(client, config, wallet, prices).await;
+        return false;
+    }
     if wallet.network == "eth" {
         hydrate_ethereum_wallet(client, config, wallet, prices).await;
         return false;
@@ -143,6 +154,38 @@ pub async fn hydrate_wallet(
         Err(message) => wallet.message = Some(message),
     }
     false
+}
+
+async fn hydrate_everstake_wallet(
+    client: &Client,
+    config: &Config,
+    wallet: &mut Wallet,
+    prices: &AssetPrices,
+) {
+    match everstake_balance(client, config, &wallet.address).await {
+        Ok(balance) => {
+            let price = prices.get("ethereum");
+            wallet.balance = balance;
+            wallet.symbol = "ETH".to_string();
+            wallet.value = balance * price;
+            wallet.assets = vec![wallet_asset(
+                "eth",
+                "eth",
+                "ETH",
+                "Ethereum",
+                balance,
+                price,
+                Some("Everstake pooled staking".to_string()),
+            )];
+            wallet.message = Some("Everstake pooled staking".to_string());
+        }
+        Err(message) => {
+            wallet.balance = 0.0;
+            wallet.value = 0.0;
+            wallet.assets.clear();
+            wallet.message = Some(message);
+        }
+    }
 }
 
 async fn hydrate_ethereum_wallet(
@@ -380,6 +423,116 @@ async fn erc20_balance(
     Ok(units as f64 / 10_f64.powi(decimals as i32))
 }
 
+async fn everstake_balance(
+    client: &Client,
+    config: &Config,
+    pool_address: &str,
+) -> Result<f64, String> {
+    if config.configured_ethereum_addresses.is_empty() {
+        return Err("Everstake tracking requires HWR_ETHEREUM_ADDRESSES".to_string());
+    }
+    let url = format!(
+        "{}/addresses/{}/logs",
+        config.ethereum_explorer_api_url.trim_end_matches('/'),
+        pool_address.trim()
+    );
+    let mut deposits = 0_u128;
+    let mut withdrawals = 0_u128;
+    let mut owners = HashSet::new();
+    for owner in &config.configured_ethereum_addresses {
+        if !owners.insert(owner.trim().to_lowercase()) {
+            continue;
+        }
+        let owner_topic = format!(
+            "0x{:0>64}",
+            owner.trim().trim_start_matches("0x").to_lowercase()
+        );
+        let mut next_page = None;
+        for page in 0..100 {
+            let mut query = vec![("topic".to_string(), owner_topic.clone())];
+            if let Some(Value::Object(parameters)) = &next_page {
+                query.extend(parameters.iter().filter_map(|(key, value)| {
+                    let value = value
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| value.as_u64().map(|number| number.to_string()))
+                        .or_else(|| value.as_i64().map(|number| number.to_string()))?;
+                    Some((key.clone(), value))
+                }));
+            }
+            let response: Value = client
+                .get(&url)
+                .query(&query)
+                .send()
+                .await
+                .map_err(network_error)?
+                .error_for_status()
+                .map_err(|error| {
+                    format!(
+                        "Ethereum explorer returned HTTP {}",
+                        error
+                            .status()
+                            .map_or("unknown".into(), |status| status.to_string())
+                    )
+                })?
+                .json()
+                .await
+                .map_err(|_| "Ethereum explorer returned an unreadable response".to_string())?;
+            let logs = response
+                .pointer("/items")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "Ethereum explorer did not return Everstake events".to_string())?;
+            for log in logs {
+                if let Some((is_deposit, value)) = everstake_log_value(log)? {
+                    if is_deposit {
+                        deposits = deposits
+                            .checked_add(value)
+                            .ok_or_else(|| "Everstake balance overflowed".to_string())?;
+                    } else {
+                        withdrawals = withdrawals
+                            .checked_add(value)
+                            .ok_or_else(|| "Everstake balance overflowed".to_string())?;
+                    }
+                }
+            }
+            next_page = response.get("next_page_params").cloned();
+            if next_page.as_ref().is_none_or(Value::is_null) {
+                break;
+            }
+            if page == 99 {
+                return Err("Everstake event history exceeded the supported page limit".to_string());
+            }
+        }
+    }
+    let balance = deposits
+        .checked_sub(withdrawals)
+        .ok_or_else(|| "Everstake withdrawals exceed recorded deposits".to_string())?;
+    Ok(balance as f64 / 1_000_000_000_000_000_000.0)
+}
+
+fn everstake_log_value(log: &Value) -> Result<Option<(bool, u128)>, String> {
+    let topic = log
+        .pointer("/topics/0")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_lowercase();
+    let is_deposit = topic == EVERSTAKE_STAKE_ADDED_TOPIC;
+    if !is_deposit && topic != EVERSTAKE_UNSTAKE_TOPIC && topic != EVERSTAKE_STAKE_CANCELED_TOPIC {
+        return Ok(None);
+    }
+    let data = log
+        .get("data")
+        .and_then(Value::as_str)
+        .and_then(|data| data.strip_prefix("0x"))
+        .ok_or_else(|| "Everstake event contained invalid data".to_string())?;
+    let value = data
+        .get(..64)
+        .ok_or_else(|| "Everstake event contained invalid data".to_string())?;
+    let value = u128::from_str_radix(value, 16)
+        .map_err(|_| "Everstake event contained an invalid amount".to_string())?;
+    Ok(Some((is_deposit, value)))
+}
+
 fn balance_of_data(owner: &str) -> String {
     format!(
         "0x70a08231{:0>64}",
@@ -435,7 +588,12 @@ fn provider_status(error: reqwest::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{balance_of_data, validate_wallet};
+    use serde_json::json;
+
+    use super::{
+        EVERSTAKE_STAKE_ADDED_TOPIC, EVERSTAKE_UNSTAKE_TOPIC, balance_of_data, everstake_log_value,
+        validate_wallet,
+    };
 
     #[test]
     fn validates_supported_wallet_shapes() {
@@ -457,6 +615,26 @@ mod tests {
         assert_eq!(
             data,
             "0x70a0823100000000000000000000000000000000000000000000000000000000000000ab"
+        );
+    }
+
+    #[test]
+    fn decodes_everstake_position_events() {
+        let deposit = json!({
+            "topics": [EVERSTAKE_STAKE_ADDED_TOPIC],
+            "data": "0x00000000000000000000000000000000000000000000000001717b72f0a400000000000000000000000000000000000000000000000000000000000000000001"
+        });
+        let withdrawal = json!({
+            "topics": [EVERSTAKE_UNSTAKE_TOPIC],
+            "data": "0x000000000000000000000000000000000000000000000000002386f26fc10000"
+        });
+        assert_eq!(
+            everstake_log_value(&deposit).unwrap(),
+            Some((true, 104_000_000_000_000_000))
+        );
+        assert_eq!(
+            everstake_log_value(&withdrawal).unwrap(),
+            Some((false, 10_000_000_000_000_000))
         );
     }
 }

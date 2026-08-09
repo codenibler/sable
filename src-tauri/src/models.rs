@@ -184,40 +184,68 @@ pub struct AddWalletInput {
 pub struct NetWorthEntry {
     pub date: String,
     pub net_worth: f64,
-    pub stocks: f64,
+    pub trading212: f64,
     pub opessocius: f64,
     pub crypto: f64,
-    pub savings: f64,
-    pub spending: f64,
+    pub okx: f64,
+    pub trezor: f64,
+    pub bunq: f64,
+    pub t212_spending: f64,
+    pub ing: f64,
     pub receivables: f64,
     pub cash: f64,
     pub misc: f64,
+    /// Retired in favour of per-bank categories; kept so older snapshots stay accurate.
+    pub savings: f64,
+    /// Retired in favour of per-bank categories; kept so older snapshots stay accurate.
+    pub spending: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveNetWorthInput {
     pub date: String,
-    pub stocks: f64,
+    pub trading212: f64,
     pub opessocius: f64,
     pub crypto: f64,
-    pub savings: f64,
-    pub spending: f64,
+    pub okx: f64,
+    pub trezor: f64,
+    pub bunq: f64,
+    pub t212_spending: f64,
+    pub ing: f64,
     pub receivables: f64,
     pub cash: f64,
     pub misc: f64,
+    #[serde(default)]
+    pub savings: f64,
+    #[serde(default)]
+    pub spending: f64,
 }
 
 impl SaveNetWorthInput {
+    pub fn categories(&self) -> [(&'static str, f64); 13] {
+        [
+            ("Trading 212", self.trading212),
+            ("Opessocius", self.opessocius),
+            ("Crypto", self.crypto),
+            ("OKX", self.okx),
+            ("Trezor", self.trezor),
+            ("Bunq", self.bunq),
+            ("T212 Spending", self.t212_spending),
+            ("ING", self.ing),
+            ("Receivables", self.receivables),
+            ("Cash", self.cash),
+            ("Misc", self.misc),
+            ("Savings", self.savings),
+            ("Spending", self.spending),
+        ]
+    }
+
     pub fn net_worth(&self) -> f64 {
-        self.stocks
-            + self.opessocius
-            + self.crypto
-            + self.savings
-            + self.spending
-            + self.receivables
-            + self.cash
-            + self.misc
+        self.categories()
+            .into_iter()
+            .map(|(_, amount)| amount)
+            .sum()
     }
 }
 

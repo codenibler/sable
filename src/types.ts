@@ -32,7 +32,7 @@ export type Wallet = {
   network: "btc" | "eth" | "sol";
   displayAddress: string;
   label: string;
-  walletType: "address" | "xpub";
+  walletType: "address" | "xpub" | "everstake";
   addressCount: number;
   balance: number;
   symbol: string;
@@ -148,14 +148,20 @@ export type AddWalletInput = {
 export type NetWorthEntry = {
   date: string;
   netWorth: number;
-  stocks: number;
+  trading212: number;
   opessocius: number;
   crypto: number;
-  savings: number;
-  spending: number;
+  okx: number;
+  trezor: number;
+  bunq: number;
+  t212Spending: number;
+  ing: number;
   receivables: number;
   cash: number;
   misc: number;
+  /** Retired categories, kept so snapshots recorded before the bank split stay accurate. */
+  savings: number;
+  spending: number;
 };
 
 export type SaveNetWorthInput = Omit<NetWorthEntry, "netWorth">;

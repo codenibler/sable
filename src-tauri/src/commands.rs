@@ -414,13 +414,13 @@ pub async fn get_dashboard(state: State<'_, AppState>) -> Result<Dashboard, Stri
                 };
                 Ok(DataPoint {
                     timestamp: format!("{}T12:00:00Z", entry.date),
-                    value: entry.stocks,
+                    value: entry.trading212,
                     invested,
                     opessocius_winnings: 0.0,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let history = merge_historical_stocks_with_live_history(historical, live_history);
+        let history = merge_historical_trading212_with_live_history(historical, live_history);
         if history_is_usable {
             rebuild_cash_position_history(history, db::cash_transactions(&database)?)?
         } else {
@@ -609,7 +609,7 @@ fn populate_demo_wallets(portfolios: &mut [CryptoPortfolio]) {
     });
 }
 
-fn merge_historical_stocks_with_live_history(
+fn merge_historical_trading212_with_live_history(
     mut historical: Vec<DataPoint>,
     live: Vec<DataPoint>,
 ) -> Vec<DataPoint> {
@@ -1229,16 +1229,7 @@ pub fn save_net_worth_entry(
     if parsed_date.format("%Y-%m-%d").to_string() != input.date {
         return Err("Net worth date must use YYYY-MM-DD format".to_string());
     }
-    for (label, amount) in [
-        ("Stocks", input.stocks),
-        ("Opessocius", input.opessocius),
-        ("Crypto", input.crypto),
-        ("Savings", input.savings),
-        ("Spending", input.spending),
-        ("Receivables", input.receivables),
-        ("Cash", input.cash),
-        ("Misc", input.misc),
-    ] {
+    for (label, amount) in input.categories() {
         if !amount.is_finite() || amount < 0.0 {
             return Err(format!("{label} must be a non-negative amount"));
         }
@@ -1275,8 +1266,9 @@ mod tests {
     use super::{
         accrued_monthly_winnings, crypto_invested_basis, crypto_portfolio_baseline,
         distributed_winnings, extend_asset_history_to, grouped_crypto_assets,
-        include_configured_tokens_from_portfolio_start, merge_historical_stocks_with_live_history,
-        month_bounds, planned_default_monthly_returns, rebuild_cash_position_history, return_month,
+        include_configured_tokens_from_portfolio_start,
+        merge_historical_trading212_with_live_history, month_bounds,
+        planned_default_monthly_returns, rebuild_cash_position_history, return_month,
     };
     use crate::{
         config::EthereumTokenConfig,
@@ -1357,14 +1349,14 @@ mod tests {
     }
 
     #[test]
-    fn uses_net_worth_stocks_until_live_trading_history_begins() {
+    fn uses_net_worth_trading212_until_live_trading_history_begins() {
         let point = |timestamp: &str, value: f64| DataPoint {
             timestamp: timestamp.to_string(),
             value,
             invested: value,
             opessocius_winnings: 0.0,
         };
-        let history = merge_historical_stocks_with_live_history(
+        let history = merge_historical_trading212_with_live_history(
             vec![
                 point("2025-02-24T12:00:00Z", 5_053.0),
                 point("2026-08-02T12:00:00Z", 99_999.0),

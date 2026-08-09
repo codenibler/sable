@@ -111,14 +111,19 @@ fn initialize(connection: &Connection) -> Result<(), String> {
              );
              CREATE TABLE IF NOT EXISTS net_worth_entries (
                 date TEXT PRIMARY KEY,
-                stocks_eur REAL NOT NULL,
+                trading212_eur REAL NOT NULL,
                 opessocius_eur REAL NOT NULL,
                 crypto_eur REAL NOT NULL,
-                savings_eur REAL NOT NULL,
-                spending_eur REAL NOT NULL,
+                okx_eur REAL NOT NULL DEFAULT 0,
+                trezor_eur REAL NOT NULL DEFAULT 0,
+                bunq_eur REAL NOT NULL DEFAULT 0,
+                t212_spending_eur REAL NOT NULL DEFAULT 0,
+                ing_eur REAL NOT NULL DEFAULT 0,
                 receivables_eur REAL NOT NULL,
                 cash_eur REAL NOT NULL,
                 misc_eur REAL NOT NULL,
+                savings_eur REAL NOT NULL DEFAULT 0,
+                spending_eur REAL NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
              );
@@ -153,6 +158,25 @@ fn initialize(connection: &Connection) -> Result<(), String> {
         connection,
         "ALTER TABLE manual_monthly_winnings ADD COLUMN is_override INTEGER NOT NULL DEFAULT 1",
     )?;
+    // Stocks were always held at Trading 212, so every recorded balance moves across as-is.
+    rename_column_if_present(
+        connection,
+        "net_worth_entries",
+        "stocks_eur",
+        "trading212_eur",
+    )?;
+    for column in [
+        "okx_eur",
+        "trezor_eur",
+        "bunq_eur",
+        "t212_spending_eur",
+        "ing_eur",
+    ] {
+        add_column_if_missing(
+            connection,
+            &format!("ALTER TABLE net_worth_entries ADD COLUMN {column} REAL NOT NULL DEFAULT 0"),
+        )?;
+    }
     Ok(())
 }
 
@@ -178,19 +202,25 @@ pub fn import_net_worth_history(
         inserted += connection
             .execute(
                 "INSERT OR IGNORE INTO net_worth_entries(
-                    date, stocks_eur, opessocius_eur, crypto_eur, savings_eur, spending_eur,
-                    receivables_eur, cash_eur, misc_eur, created_at, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                    date, trading212_eur, opessocius_eur, crypto_eur, okx_eur, trezor_eur,
+                    bunq_eur, t212_spending_eur, ing_eur, receivables_eur, cash_eur, misc_eur,
+                    savings_eur, spending_eur, created_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
                 params![
                     entry.date,
-                    entry.stocks,
+                    entry.trading212,
                     entry.opessocius,
                     entry.crypto,
-                    entry.savings,
-                    entry.spending,
+                    entry.okx,
+                    entry.trezor,
+                    entry.bunq,
+                    entry.t212_spending,
+                    entry.ing,
                     entry.receivables,
                     entry.cash,
                     entry.misc,
+                    entry.savings,
+                    entry.spending,
                     now,
                 ],
             )
@@ -213,29 +243,40 @@ pub fn save_net_worth_entry(
     connection
         .execute(
             "INSERT INTO net_worth_entries(
-                date, stocks_eur, opessocius_eur, crypto_eur, savings_eur, spending_eur,
-                receivables_eur, cash_eur, misc_eur, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+                date, trading212_eur, opessocius_eur, crypto_eur, okx_eur, trezor_eur,
+                bunq_eur, t212_spending_eur, ing_eur, receivables_eur, cash_eur, misc_eur,
+                savings_eur, spending_eur, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)
              ON CONFLICT(date) DO UPDATE SET
-                stocks_eur = excluded.stocks_eur,
+                trading212_eur = excluded.trading212_eur,
                 opessocius_eur = excluded.opessocius_eur,
                 crypto_eur = excluded.crypto_eur,
-                savings_eur = excluded.savings_eur,
-                spending_eur = excluded.spending_eur,
+                okx_eur = excluded.okx_eur,
+                trezor_eur = excluded.trezor_eur,
+                bunq_eur = excluded.bunq_eur,
+                t212_spending_eur = excluded.t212_spending_eur,
+                ing_eur = excluded.ing_eur,
                 receivables_eur = excluded.receivables_eur,
                 cash_eur = excluded.cash_eur,
                 misc_eur = excluded.misc_eur,
+                savings_eur = excluded.savings_eur,
+                spending_eur = excluded.spending_eur,
                 updated_at = excluded.updated_at",
             params![
                 entry.date,
-                entry.stocks,
+                entry.trading212,
                 entry.opessocius,
                 entry.crypto,
-                entry.savings,
-                entry.spending,
+                entry.okx,
+                entry.trezor,
+                entry.bunq,
+                entry.t212_spending,
+                entry.ing,
                 entry.receivables,
                 entry.cash,
                 entry.misc,
+                entry.savings,
+                entry.spending,
                 now,
             ],
         )
@@ -246,39 +287,46 @@ pub fn save_net_worth_entry(
 pub fn list_net_worth_entries(connection: &Connection) -> Result<Vec<NetWorthEntry>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT date, stocks_eur, opessocius_eur, crypto_eur, savings_eur, spending_eur,
-                    receivables_eur, cash_eur, misc_eur
+            "SELECT date, trading212_eur, opessocius_eur, crypto_eur, okx_eur, trezor_eur,
+                    bunq_eur, t212_spending_eur, ing_eur, receivables_eur, cash_eur, misc_eur,
+                    savings_eur, spending_eur
              FROM net_worth_entries ORDER BY date",
         )
         .map_err(to_string)?;
     statement
         .query_map([], |row| {
-            let stocks = row.get(1)?;
-            let opessocius = row.get(2)?;
-            let crypto = row.get(3)?;
-            let savings = row.get(4)?;
-            let spending = row.get(5)?;
-            let receivables = row.get(6)?;
-            let cash = row.get(7)?;
-            let misc = row.get(8)?;
-            Ok(NetWorthEntry {
+            let entry = SaveNetWorthInput {
                 date: row.get(0)?,
-                net_worth: stocks
-                    + opessocius
-                    + crypto
-                    + savings
-                    + spending
-                    + receivables
-                    + cash
-                    + misc,
-                stocks,
-                opessocius,
-                crypto,
-                savings,
-                spending,
-                receivables,
-                cash,
-                misc,
+                trading212: row.get(1)?,
+                opessocius: row.get(2)?,
+                crypto: row.get(3)?,
+                okx: row.get(4)?,
+                trezor: row.get(5)?,
+                bunq: row.get(6)?,
+                t212_spending: row.get(7)?,
+                ing: row.get(8)?,
+                receivables: row.get(9)?,
+                cash: row.get(10)?,
+                misc: row.get(11)?,
+                savings: row.get(12)?,
+                spending: row.get(13)?,
+            };
+            Ok(NetWorthEntry {
+                net_worth: entry.net_worth(),
+                date: entry.date,
+                trading212: entry.trading212,
+                opessocius: entry.opessocius,
+                crypto: entry.crypto,
+                okx: entry.okx,
+                trezor: entry.trezor,
+                bunq: entry.bunq,
+                t212_spending: entry.t212_spending,
+                ing: entry.ing,
+                receivables: entry.receivables,
+                cash: entry.cash,
+                misc: entry.misc,
+                savings: entry.savings,
+                spending: entry.spending,
             })
         })
         .map_err(to_string)?
@@ -299,6 +347,33 @@ fn add_column_if_missing(connection: &Connection, statement: &str) -> Result<(),
         Err(error) if error.to_string().contains("duplicate column name") => Ok(()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+fn rename_column_if_present(
+    connection: &Connection,
+    table: &str,
+    from: &str,
+    to: &str,
+) -> Result<(), String> {
+    let has_old_column = connection
+        .query_row(
+            "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2",
+            params![table, from],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(to_string)?
+        .is_some();
+    if !has_old_column {
+        return Ok(());
+    }
+    connection
+        .execute(
+            &format!("ALTER TABLE {table} RENAME COLUMN {from} TO {to}"),
+            [],
+        )
+        .map_err(to_string)?;
+    Ok(())
 }
 
 pub fn history_sync_state(connection: &Connection) -> Result<HistorySyncState, String> {
@@ -537,6 +612,24 @@ pub fn add_wallet(
             }
         })?;
     Ok(connection.last_insert_rowid())
+}
+
+pub fn update_wallet_metadata(
+    connection: &Connection,
+    portfolio_id: i64,
+    network: &str,
+    address: &str,
+    label: &str,
+    wallet_type: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "UPDATE wallets SET label = ?1, wallet_type = ?2
+             WHERE portfolio_id = ?3 AND network = ?4 AND lower(address) = lower(?5)",
+            params![label, wallet_type, portfolio_id, network, address.trim()],
+        )
+        .map_err(to_string)?;
+    Ok(())
 }
 
 pub fn update_wallet_cache(
@@ -859,6 +952,7 @@ mod tests {
         list_portfolios, monthly_winning, monthly_winnings, remove_net_worth_entry,
         save_cash_events, save_crypto_snapshot, save_history_sync_state, save_monthly_winnings,
         save_net_worth_entry, save_snapshot, simple_return_since, snapshot_baseline,
+        update_wallet_metadata,
     };
 
     #[test]
@@ -867,14 +961,19 @@ mod tests {
         initialize(&database).expect("schema");
         let mut entry = SaveNetWorthInput {
             date: "2026-07-27".to_string(),
-            stocks: 10_919.67,
+            trading212: 10_919.67,
             opessocius: 8_028.04,
             crypto: 0.0,
-            savings: 125.0,
-            spending: 217.85,
+            okx: 0.0,
+            trezor: 0.0,
+            bunq: 0.0,
+            t212_spending: 0.0,
+            ing: 0.0,
             receivables: 1_033.75,
             cash: 40.0,
             misc: 0.0,
+            savings: 125.0,
+            spending: 217.85,
         };
         assert_eq!(
             import_net_worth_history(&database, &[entry.clone()]).unwrap(),
@@ -895,6 +994,39 @@ mod tests {
         assert!(list_net_worth_entries(&database).unwrap().is_empty());
         assert_eq!(import_net_worth_history(&database, &[entry]).unwrap(), 0);
         assert!(list_net_worth_entries(&database).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migrates_stock_balances_recorded_before_the_trading212_rename() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        database
+            .execute_batch(
+                "CREATE TABLE net_worth_entries (
+                    date TEXT PRIMARY KEY,
+                    stocks_eur REAL NOT NULL,
+                    opessocius_eur REAL NOT NULL,
+                    crypto_eur REAL NOT NULL,
+                    savings_eur REAL NOT NULL,
+                    spending_eur REAL NOT NULL,
+                    receivables_eur REAL NOT NULL,
+                    cash_eur REAL NOT NULL,
+                    misc_eur REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                 );
+                 INSERT INTO net_worth_entries VALUES (
+                    '2026-07-27', 10919.67, 8028.04, 0, 125, 217.85, 1033.75, 40, 0,
+                    '2026-07-27T00:00:00Z', '2026-07-27T00:00:00Z'
+                 );",
+            )
+            .expect("legacy schema");
+
+        initialize(&database).expect("migration");
+        let entries = list_net_worth_entries(&database).expect("entries");
+        assert_eq!(entries[0].trading212, 10_919.67);
+        assert_eq!(entries[0].savings, 125.0);
+        assert_eq!(entries[0].okx, 0.0);
+        assert!((entries[0].net_worth - 20_364.31).abs() < 0.001);
     }
 
     #[test]
@@ -925,6 +1057,37 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("0x0000000000000000000000000000000000000000")
         );
+    }
+
+    #[test]
+    fn upgrades_a_configured_wallet_to_an_everstake_position() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        let portfolio_id = create_portfolio(&database, "Cold storage").expect("portfolio");
+        let pool = "0x0000000000000000000000000000000000000001";
+        add_wallet(
+            &database,
+            portfolio_id,
+            "eth",
+            pool,
+            "Staked Ethereum wallet",
+            "address",
+        )
+        .expect("legacy configured wallet");
+
+        update_wallet_metadata(
+            &database,
+            portfolio_id,
+            "eth",
+            pool,
+            "Everstake staked ETH",
+            "everstake",
+        )
+        .expect("metadata update");
+
+        let portfolios = list_portfolios(&database).expect("portfolio list");
+        assert_eq!(portfolios[0].wallets[0].label, "Everstake staked ETH");
+        assert_eq!(portfolios[0].wallets[0].wallet_type, "everstake");
     }
 
     #[test]

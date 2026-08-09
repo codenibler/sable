@@ -109,11 +109,6 @@ fn import_configured_wallets(
             &config.configured_ethereum_addresses,
             "Ethereum wallet",
         ),
-        (
-            "eth",
-            &config.configured_staked_ethereum_addresses,
-            "Staked Ethereum wallet",
-        ),
         ("sol", &config.configured_solana_addresses, "Solana wallet"),
         (
             "sol",
@@ -136,6 +131,31 @@ fn import_configured_wallets(
                 Err(error) if error == "This wallet is already in the portfolio" => {}
                 Err(error) => return Err(error),
             }
+        }
+    }
+    for pool_address in &config.configured_staked_ethereum_addresses {
+        let validated = providers::crypto::validate_wallet("eth", pool_address)
+            .map_err(|error| format!("Configured Everstake pool is invalid: {error}"))?;
+        match db::add_wallet(
+            database,
+            portfolio_id,
+            &validated.network,
+            pool_address,
+            "Everstake staked ETH",
+            "everstake",
+        ) {
+            Ok(_) => {}
+            Err(error) if error == "This wallet is already in the portfolio" => {
+                db::update_wallet_metadata(
+                    database,
+                    portfolio_id,
+                    &validated.network,
+                    pool_address,
+                    "Everstake staked ETH",
+                    "everstake",
+                )?;
+            }
+            Err(error) => return Err(error),
         }
     }
     Ok(())
