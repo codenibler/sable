@@ -25,10 +25,17 @@ separately only when the binary itself has not changed. Rebuilding the app is
 `packaging/sable.desktop` is the source of truth — edit it in the repository and
 reinstall, never edit the copy under `~/.local/share/applications/`.
 
-It launches `~/Applications/Sable.AppImage` through `env SABLE_ENV_FILE=<repo>/.env`
-and sets `Path=` to the repository. That indirection is deliberate: the gitignored
-`.env` stays the single source of credentials and nothing secret is copied into
-`~/Applications`. Keep both absolute paths pointing at the checkout if the
+It runs `packaging/sable-launch` rather than the AppImage, and sets `Path=` to the
+repository. Going through the wrapper is what makes a menu click reveal the running
+instance instead of stacking up a new one behind the `special:sable` window rule.
+
+The entry itself no longer sets any env. The wrapper resolves both
+`packaging/sable-monitor` and the env file from its own location, so it starts Sable
+with `SABLE_ENV_FILE=<repo>/.env` derived from wherever the script lives — the
+gitignored `.env` stays the single source of credentials and nothing secret is copied
+into `~/Applications`. An inherited `SABLE_ENV_FILE` still wins, and `sable-monitor`'s
+own hardcoded `~/Projects/sable/.env` default only applies when it is run directly.
+Keep the absolute paths in the `.desktop` entry pointing at the checkout if the
 repository ever moves.
 
 `StartupWMClass=sable` matches the window class the Tauri binary reports, which is
