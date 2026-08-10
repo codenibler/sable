@@ -82,6 +82,7 @@ pub async fn hydrate_wallet(
                 None,
             )];
             wallet.message = None;
+            wallet.error = None;
             return false;
         }
         match bitcoin_xpub::scan(client, config, &wallet.address).await {
@@ -100,6 +101,7 @@ pub async fn hydrate_wallet(
                     None,
                 )];
                 wallet.message = None;
+                wallet.error = None;
                 return true;
             }
             Err(message) => {
@@ -113,7 +115,8 @@ pub async fn hydrate_wallet(
                     price,
                     Some(message.clone()),
                 )];
-                wallet.message = Some(message);
+                wallet.message = Some(message.clone());
+                wallet.error = Some(message);
                 return false;
             }
         }
@@ -150,8 +153,12 @@ pub async fn hydrate_wallet(
                 None,
             )];
             wallet.message = None;
+            wallet.error = None;
         }
-        Err(message) => wallet.message = Some(message),
+        Err(message) => {
+            wallet.message = Some(message.clone());
+            wallet.error = Some(message);
+        }
     }
     false
 }
@@ -178,12 +185,14 @@ async fn hydrate_everstake_wallet(
                 Some("Everstake pooled staking".to_string()),
             )];
             wallet.message = Some("Everstake pooled staking".to_string());
+            wallet.error = None;
         }
         Err(message) => {
             wallet.balance = 0.0;
             wallet.value = 0.0;
             wallet.assets.clear();
-            wallet.message = Some(message);
+            wallet.message = Some(message.clone());
+            wallet.error = Some(message);
         }
     }
 }
@@ -236,6 +245,7 @@ async fn hydrate_ethereum_wallet(
     wallet.value = assets.iter().map(|asset| asset.value).sum();
     wallet.assets = assets;
     wallet.message = (!messages.is_empty()).then(|| messages.join(" · "));
+    wallet.error = wallet.message.clone();
 }
 
 fn wallet_asset(

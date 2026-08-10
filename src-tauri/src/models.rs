@@ -153,6 +153,11 @@ pub struct Wallet {
     pub value: f64,
     pub assets: Vec<WalletAsset>,
     pub message: Option<String>,
+    /// Set only when the wallet could not be read. `message` also carries notes about wallets
+    /// that answered perfectly well, such as an Everstake pool, so it cannot be used to decide
+    /// whether the numbers below are trustworthy.
+    #[serde(skip_serializing)]
+    pub error: Option<String>,
     #[serde(skip_serializing)]
     pub last_checked_at: Option<String>,
 }

@@ -190,6 +190,7 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
         for portfolio in &mut portfolios {
             for wallet in &mut portfolio.wallets {
                 wallet.message = Some(message.clone());
+                wallet.error = Some(message.clone());
             }
         }
     }
@@ -197,8 +198,6 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
     let mut notices = Vec::new();
     let mut sources = Vec::new();
     let mut holdings = Vec::new();
-    let trading_connected = trading_result.is_ok();
-    let mut trading_holding_count = 0;
     if let Some(message) = history_sync_error {
         notices.push(format!("Cash history sync paused: {message}"));
     } else if !cash_history.backfill_complete && cash_history.event_count > 0 {
@@ -208,45 +207,73 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
         ));
     }
     let history_is_usable = cash_history.backfill_complete && cash_history.event_count > 0;
-    let (trading_value, trading_invested, cash_value, trading_return) = match trading_result {
+    let trading_health = trading_source_health(
+        trading_result.is_ok(),
+        state.config.demo_mode || state.config.trading212_is_configured(),
+    );
+    let trading_connected = trading_health == SourceHealth::Reporting;
+    let (
+        reported_value,
+        reported_invested,
+        cash_value,
+        reported_return,
+        trading_message,
+        brokerage,
+    ) = match trading_result {
         Ok(overview) => {
-            trading_holding_count = overview.holdings.len();
             let contribution_adjusted_return = if history_is_usable {
                 overview.total_value - cash_history.net_contributions
             } else {
                 overview.return_value
             };
-            sources.push(SourceSummary {
-                id: "trading212".to_string(),
-                name: "Trading 212".to_string(),
-                kind: "brokerage".to_string(),
-                value: overview.total_value,
-                return_value: contribution_adjusted_return,
-                connected: true,
-                message: None,
-            });
-            holdings.extend(overview.holdings);
             (
                 overview.total_value,
                 overview.invested_value,
                 overview.cash_value,
                 contribution_adjusted_return,
+                None,
+                overview.holdings,
             )
         }
         Err(message) => {
             notices.push(message.clone());
-            sources.push(SourceSummary {
-                id: "trading212".to_string(),
-                name: "Trading 212".to_string(),
-                kind: "brokerage".to_string(),
-                value: 0.0,
-                return_value: 0.0,
-                connected: false,
-                message: Some(message),
-            });
-            (0.0, 0.0, 0.0, 0.0)
+            (0.0, 0.0, 0.0, 0.0, Some(message), Vec::new())
         }
     };
+    let trading_holding_count = brokerage.len();
+    holdings.extend(brokerage);
+    let trading_basis = if history_is_usable {
+        cash_history.net_contributions
+    } else {
+        reported_invested
+    };
+    let stored_trading = {
+        let database = state.database.lock().map_err(|_| "Database lock failed")?;
+        stored_trading_snapshot(
+            &database,
+            trading_health,
+            reported_value,
+            trading_basis,
+            state.config.snapshot_interval_minutes,
+        )?
+    };
+    // A brokerage that could not be read keeps the value the chart already shows, so the card
+    // and the headline agree with it; `connected: false` and the notice say why it is stale.
+    let trading_value = stored_trading.value;
+    let trading_return = if trading_connected {
+        reported_return
+    } else {
+        stored_trading.value - stored_trading.invested
+    };
+    sources.push(SourceSummary {
+        id: "trading212".to_string(),
+        name: "Trading 212".to_string(),
+        kind: "brokerage".to_string(),
+        value: trading_value,
+        return_value: trading_return,
+        connected: trading_connected,
+        message: trading_message,
+    });
 
     let opessocius_value = state.config.opessocius_current_balance + total_opessocius_winnings;
     let opessocius_invested = state.config.opessocius_net_deposits;
@@ -300,43 +327,30 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
         allocation: 0.0,
     });
 
-    let mut crypto_value = 0.0;
-    let mut crypto_invested = 0.0;
-    let mut crypto_return = 0.0;
+    // The dashboard headline is built from what the snapshots actually kept rather than from
+    // what the providers just answered, so it can never show a figure the chart has not plotted.
+    let mut stored_crypto_value = 0.0;
+    let mut stored_crypto_invested = 0.0;
+    let total_value;
+    let contribution_basis;
     {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
         for portfolio in &mut portfolios {
-            portfolio.value = portfolio.wallets.iter().map(|wallet| wallet.value).sum();
-            portfolio.assets =
-                crypto_assets(&database, portfolio, state.config.snapshot_interval_minutes)?;
-            let baseline = crypto_portfolio_baseline(portfolio);
-            portfolio.return_value = portfolio.value - baseline;
-            db::save_snapshot(
+            let stored = record_crypto_portfolio(
                 &database,
-                "portfolio",
-                portfolio.id,
-                portfolio.value,
-                baseline,
-                0.0,
+                portfolio,
                 state.config.snapshot_interval_minutes,
             )?;
-            crypto_value += portfolio.value;
-            crypto_invested += baseline;
-            crypto_return += portfolio.return_value;
+            stored_crypto_value += stored.value;
+            stored_crypto_invested += stored.invested;
             sources.push(SourceSummary {
                 id: format!("portfolio-{}", portfolio.id),
                 name: portfolio.name.clone(),
                 kind: "crypto".to_string(),
                 value: portfolio.value,
                 return_value: portfolio.return_value,
-                connected: portfolio
-                    .wallets
-                    .iter()
-                    .all(|wallet| wallet.message.is_none()),
-                message: portfolio
-                    .wallets
-                    .iter()
-                    .find_map(|wallet| wallet.message.clone()),
+                connected: crypto_portfolio_is_reporting(portfolio),
+                message: crypto_portfolio_message(portfolio),
             });
             holdings.extend(portfolio.wallets.iter().flat_map(|wallet| {
                 wallet.assets.iter().map(|asset| Holding {
@@ -353,46 +367,34 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
             }));
         }
 
-        let total_value = trading_value + crypto_value + opessocius_value;
-        let invested_value = if history_is_usable {
-            cash_history.net_contributions + crypto_invested + opessocius_invested
-        } else {
-            trading_invested + crypto_invested + opessocius_invested
-        };
-        if trading_connected {
-            db::save_snapshot(
-                &database,
-                "trading212",
-                0,
-                trading_value,
-                if history_is_usable {
+        let total = record_total(
+            &database,
+            db::StoredSnapshot {
+                value: stored_trading.value,
+                invested: if history_is_usable {
                     cash_history.net_contributions
                 } else {
-                    trading_invested
+                    stored_trading.invested
                 },
-                0.0,
-                state.config.snapshot_interval_minutes,
-            )?;
-        }
-        db::save_snapshot(
-            &database,
-            "total",
-            0,
-            total_value,
-            invested_value,
+            },
+            db::StoredSnapshot {
+                value: stored_crypto_value,
+                invested: stored_crypto_invested,
+            },
+            db::StoredSnapshot {
+                value: opessocius_value,
+                invested: opessocius_invested,
+            },
             total_opessocius_winnings,
             state.config.snapshot_interval_minutes,
         )?;
+        total_value = total.value;
+        contribution_basis = total.invested;
     }
 
-    let total_value = trading_value + crypto_value + opessocius_value;
-    let invested_value = trading_invested + crypto_invested + opessocius_invested;
+    let crypto_return = stored_crypto_value - stored_crypto_invested;
+    let invested_value = stored_trading.invested + stored_crypto_invested + opessocius_invested;
     let total_return = trading_return + crypto_return + opessocius_return;
-    let contribution_basis = if history_is_usable {
-        cash_history.net_contributions + crypto_invested + opessocius_invested
-    } else {
-        invested_value
-    };
     for holding in &mut holdings {
         holding.allocation = if total_value > 0.0 {
             holding.value / total_value * 100.0
@@ -471,11 +473,6 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
 
     let (opessocius_history, opessocius_periods) =
         opessocius_portfolio_history(&state.config, &opessocius_winnings)?;
-    let trading_basis = if history_is_usable {
-        cash_history.net_contributions
-    } else {
-        trading_invested
-    };
     let trading_history = {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
         let live_history = db::source_history(&database, "trading212", 0)?;
@@ -508,9 +505,9 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
             name: "Trading 212".to_string(),
             kind: "brokerage".to_string(),
             value: trading_value,
-            invested_value: trading_basis,
+            invested_value: stored_trading.invested,
             total_return: trading_return,
-            return_percent: percent_of(trading_return, trading_basis),
+            return_percent: percent_of(trading_return, stored_trading.invested),
             history: trading_history,
             periods: Vec::new(),
             item_count: trading_holding_count,
@@ -572,14 +569,8 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
                 periods: Vec::new(),
                 item_count: portfolio.wallets.len(),
                 item_label: "wallets".to_string(),
-                connected: portfolio
-                    .wallets
-                    .iter()
-                    .all(|wallet| wallet.message.is_none()),
-                message: portfolio
-                    .wallets
-                    .iter()
-                    .find_map(|wallet| wallet.message.clone()),
+                connected: crypto_portfolio_is_reporting(portfolio),
+                message: crypto_portfolio_message(portfolio),
             });
         }
     }
@@ -680,6 +671,7 @@ fn populate_demo_wallets(portfolios: &mut [CryptoPortfolio]) {
             message: None,
         }],
         message: None,
+        error: None,
         last_checked_at: None,
     });
 }
@@ -805,9 +797,148 @@ fn crypto_portfolio_baseline(portfolio: &CryptoPortfolio) -> f64 {
         .sum()
 }
 
+/// What a source can say about itself this round. A failed provider reports the same zero as
+/// an account that was emptied on purpose, and neither looks different from a source that was
+/// never set up, so the value alone can never tell them apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceHealth {
+    /// The provider answered. Its numbers are the truth, a zero included.
+    Reporting,
+    /// The provider is configured but could not be reached, so its last stored row stands in.
+    Failing,
+    /// Nothing is configured, so there is no account behind the source to carry forward.
+    Absent,
+}
+
+fn trading_source_health(answered: bool, configured: bool) -> SourceHealth {
+    match (answered, configured) {
+        (true, _) => SourceHealth::Reporting,
+        (false, true) => SourceHealth::Failing,
+        (false, false) => SourceHealth::Absent,
+    }
+}
+
+/// Trading 212 is only snapshotted while it is answering, yet its value feeds the stored total
+/// either way, so the total needs to know what an absent row means.
+fn stored_trading_snapshot(
+    connection: &Connection,
+    health: SourceHealth,
+    value: f64,
+    invested: f64,
+    snapshot_interval_minutes: i64,
+) -> Result<db::StoredSnapshot, String> {
+    match health {
+        SourceHealth::Reporting => db::save_snapshot(
+            connection,
+            "trading212",
+            0,
+            db::Reading::Reported { value, invested },
+            0.0,
+            snapshot_interval_minutes,
+        ),
+        // The account still exists behind an unreachable API, so the total keeps counting the
+        // last value stored for it rather than writing the brokerage out of the portfolio.
+        SourceHealth::Failing => db::carried_forward_snapshot(connection, "trading212", 0),
+        // Credentials were never added or have been removed. There is no balance to carry, and
+        // resurrecting an old one would keep an account the user no longer has in the total.
+        SourceHealth::Absent => Ok(db::StoredSnapshot::EMPTY),
+    }
+}
+
+/// One round for a crypto portfolio: store what its wallets reported, then read the portfolio
+/// back out of what the snapshot actually kept, so the card, the headline and the chart are
+/// three views of one number rather than three opinions.
+fn record_crypto_portfolio(
+    connection: &Connection,
+    portfolio: &mut CryptoPortfolio,
+    snapshot_interval_minutes: i64,
+) -> Result<db::StoredSnapshot, String> {
+    portfolio.value = portfolio.wallets.iter().map(|wallet| wallet.value).sum();
+    let reporting = crypto_portfolio_is_reporting(portfolio);
+    portfolio.assets = crypto_assets(connection, portfolio, reporting, snapshot_interval_minutes)?;
+    let baseline = crypto_portfolio_baseline(portfolio);
+    let stored = db::save_snapshot(
+        connection,
+        "portfolio",
+        portfolio.id,
+        if reporting {
+            db::Reading::Reported {
+                value: portfolio.value,
+                invested: baseline,
+            }
+        } else {
+            db::Reading::Unavailable
+        },
+        0.0,
+        snapshot_interval_minutes,
+    )?;
+    portfolio.value = stored.value;
+    portfolio.return_value = stored.value - stored.invested;
+    for asset in &mut portfolio.assets {
+        asset.allocation = percent_of(asset.value, portfolio.value);
+    }
+    Ok(stored)
+}
+
+/// The headline and the stored `total` row are one sum written once, so the dashboard cannot
+/// report a figure the chart has never plotted.
+fn record_total(
+    connection: &Connection,
+    trading: db::StoredSnapshot,
+    crypto: db::StoredSnapshot,
+    opessocius: db::StoredSnapshot,
+    opessocius_winnings: f64,
+    snapshot_interval_minutes: i64,
+) -> Result<db::StoredSnapshot, String> {
+    let total = db::StoredSnapshot {
+        value: trading.value + crypto.value + opessocius.value,
+        invested: trading.invested + crypto.invested + opessocius.invested,
+    };
+    // Every component has already been corrected, so the sum itself is always a real reading.
+    db::save_snapshot(
+        connection,
+        "total",
+        0,
+        db::Reading::Reported {
+            value: total.value,
+            invested: total.invested,
+        },
+        opessocius_winnings,
+        snapshot_interval_minutes,
+    )?;
+    Ok(total)
+}
+
+/// A crypto portfolio speaks for all of its wallets at once: one wallet that could not be read
+/// leaves a total that is plausible but too small, which is exactly what a value-based guard
+/// cannot catch. `Wallet::message` is no use here because a healthy Everstake wallet carries
+/// one describing the pool, so the dedicated error field decides.
+fn crypto_portfolio_is_reporting(portfolio: &CryptoPortfolio) -> bool {
+    portfolio
+        .wallets
+        .iter()
+        .all(|wallet| wallet.error.is_none())
+}
+
+/// A wallet failure outranks an informational note, so an outage is still shown to the user
+/// when some other wallet in the portfolio has something to say for itself.
+fn crypto_portfolio_message(portfolio: &CryptoPortfolio) -> Option<String> {
+    portfolio
+        .wallets
+        .iter()
+        .find_map(|wallet| wallet.error.clone())
+        .or_else(|| {
+            portfolio
+                .wallets
+                .iter()
+                .find_map(|wallet| wallet.message.clone())
+        })
+}
+
 fn crypto_assets(
     connection: &rusqlite::Connection,
     portfolio: &CryptoPortfolio,
+    reporting: bool,
     snapshot_interval_minutes: i64,
 ) -> Result<Vec<CryptoAsset>, String> {
     let grouped = grouped_crypto_assets(portfolio);
@@ -815,21 +946,24 @@ fn crypto_assets(
     for (id, (network, symbol, name, balance, value, wallet_count)) in grouped {
         let source_kind = format!("crypto-{id}");
         let price = if balance > 0.0 { value / balance } else { 0.0 };
-        let invested_value = crypto_invested_basis(
-            db::crypto_position(connection, &source_kind, portfolio.id)?,
-            balance,
-            price,
-            value,
-        );
-        db::save_crypto_snapshot(
-            connection,
-            &source_kind,
-            portfolio.id,
-            value,
-            invested_value,
-            balance,
-            snapshot_interval_minutes,
-        )?;
+        let position = db::crypto_position(connection, &source_kind, portfolio.id)?;
+        // While a wallet is unreadable the grouping only sees the units that answered. Storing
+        // that would have the basis recomputed against a position the user still holds, and the
+        // shift would survive the outage, so nothing is written until every wallet reports.
+        let invested_value = if reporting {
+            let invested = crypto_invested_basis(position, balance, price, value);
+            db::save_crypto_snapshot(
+                connection,
+                &source_kind,
+                portfolio.id,
+                db::Reading::Reported { value, invested },
+                balance,
+                snapshot_interval_minutes,
+            )?;
+            invested
+        } else {
+            position.map_or(value, |(invested, _)| invested)
+        };
         let total_return = value - invested_value;
         assets.push(CryptoAsset {
             id,
@@ -841,11 +975,7 @@ fn crypto_assets(
             invested_value,
             total_return,
             return_percent: percent_of(total_return, invested_value),
-            allocation: if portfolio.value > 0.0 {
-                value / portfolio.value * 100.0
-            } else {
-                0.0
-            },
+            allocation: percent_of(value, portfolio.value),
             wallet_count,
             history: db::source_history(connection, &source_kind, portfolio.id)?,
         });
@@ -1339,17 +1469,21 @@ fn mirror_net_worth_history(state: &AppState, database: &Connection) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::{
-        CachedDashboard, accrued_monthly_winnings, cached_dashboard, crypto_invested_basis,
-        crypto_portfolio_baseline, distributed_winnings, extend_asset_history_to,
+        CachedDashboard, SourceHealth, accrued_monthly_winnings, cached_dashboard,
+        crypto_invested_basis, crypto_portfolio_baseline, crypto_portfolio_is_reporting,
+        crypto_portfolio_message, distributed_winnings, extend_asset_history_to,
         grouped_crypto_assets, include_configured_tokens_from_portfolio_start,
         merge_historical_trading212_with_live_history, month_bounds,
-        planned_default_monthly_returns, rebuild_cash_position_history, return_month,
+        planned_default_monthly_returns, rebuild_cash_position_history, record_crypto_portfolio,
+        record_total, return_month, stored_trading_snapshot, trading_source_health,
     };
     use crate::{
         config::EthereumTokenConfig,
+        db,
         models::{CryptoAsset, CryptoPortfolio, DataPoint, Wallet, WalletAsset},
     };
     use chrono::{Local, TimeZone};
+    use rusqlite::Connection;
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
         time::{Duration as StdDuration, Instant, SystemTime},
@@ -1384,6 +1518,186 @@ mod tests {
             monitored_portfolios: Vec::new(),
             notices: Vec::new(),
         }
+    }
+
+    fn test_database() -> Connection {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        db::initialize(&database).expect("schema");
+        database
+    }
+
+    /// A wallet that answered. `message` carries notes about healthy wallets too, which is why
+    /// it cannot stand in for the error field.
+    fn noted_wallet(id: i64, value: f64, message: Option<&str>) -> Wallet {
+        Wallet {
+            id,
+            portfolio_id: 1,
+            network: "btc".to_string(),
+            address: format!("wallet-{id}"),
+            display_address: format!("wallet-{id}"),
+            label: format!("Wallet {id}"),
+            wallet_type: "address".to_string(),
+            address_count: 1,
+            balance: value / 100.0,
+            symbol: "BTC".to_string(),
+            value,
+            assets: vec![WalletAsset {
+                id: "btc".to_string(),
+                network: "btc".to_string(),
+                symbol: "BTC".to_string(),
+                name: "Bitcoin".to_string(),
+                balance: value / 100.0,
+                price: 100.0,
+                value,
+                message: None,
+            }],
+            message: message.map(str::to_string),
+            error: None,
+            last_checked_at: None,
+        }
+    }
+
+    fn reporting_wallet(id: i64, value: f64) -> Wallet {
+        noted_wallet(id, value, None)
+    }
+
+    fn unreadable_wallet(id: i64) -> Wallet {
+        let mut wallet = noted_wallet(id, 0.0, Some("Blockstream is unreachable"));
+        wallet.assets.clear();
+        wallet.balance = 0.0;
+        wallet.error = Some("Blockstream is unreachable".to_string());
+        wallet
+    }
+
+    fn crypto_portfolio(wallets: Vec<Wallet>) -> CryptoPortfolio {
+        CryptoPortfolio {
+            id: 1,
+            name: "Trezor Safe".to_string(),
+            value: 0.0,
+            return_value: 0.0,
+            assets: Vec::new(),
+            wallets,
+        }
+    }
+
+    /// An unreachable brokerage writes no snapshot of its own, so without a carry-forward it
+    /// would silently subtract the whole account from the stored total.
+    #[test]
+    fn an_unreachable_broker_keeps_its_last_value_in_the_total() {
+        let database = test_database();
+        stored_trading_snapshot(&database, SourceHealth::Reporting, 10_906.17, 9_000.0, 0)
+            .expect("connected round");
+
+        let stored = stored_trading_snapshot(&database, SourceHealth::Failing, 0.0, 0.0, 0)
+            .expect("unreachable round");
+
+        assert_eq!(stored.value, 10_906.17);
+        assert_eq!(stored.invested, 9_000.0);
+        assert_eq!(
+            db::source_history(&database, "trading212", 0)
+                .expect("stored history")
+                .len(),
+            1
+        );
+    }
+
+    /// Removing the credentials removes the account. Carrying its last value forward would keep
+    /// a brokerage the user no longer holds in every future total.
+    #[test]
+    fn an_unconfigured_broker_contributes_nothing_to_the_total() {
+        let database = test_database();
+        stored_trading_snapshot(&database, SourceHealth::Reporting, 10_906.17, 9_000.0, 0)
+            .expect("connected round");
+
+        let stored = stored_trading_snapshot(&database, SourceHealth::Absent, 0.0, 0.0, 0)
+            .expect("unconfigured round");
+
+        assert_eq!(stored, db::StoredSnapshot::EMPTY);
+    }
+
+    #[test]
+    fn tells_an_unreachable_broker_apart_from_one_that_was_never_configured() {
+        assert_eq!(trading_source_health(true, true), SourceHealth::Reporting);
+        assert_eq!(trading_source_health(false, true), SourceHealth::Failing);
+        assert_eq!(trading_source_health(false, false), SourceHealth::Absent);
+    }
+
+    /// An Everstake wallet reports a message describing the pool while working perfectly, so
+    /// health cannot be read off `message`.
+    #[test]
+    fn a_wallet_note_is_not_a_wallet_failure() {
+        let portfolio = crypto_portfolio(vec![
+            noted_wallet(1, 500.0, Some("Everstake pooled staking")),
+            reporting_wallet(2, 240.69),
+        ]);
+
+        assert!(crypto_portfolio_is_reporting(&portfolio));
+        assert_eq!(
+            crypto_portfolio_message(&portfolio).as_deref(),
+            Some("Everstake pooled staking")
+        );
+    }
+
+    /// One unreadable wallet leaves a portfolio total that is smaller but perfectly plausible,
+    /// which no zero-based guard can catch. It has to carry forward, keep the failure visible,
+    /// and leave the per-asset basis alone so the returning wallet is not read as a deposit.
+    #[test]
+    fn a_partly_readable_crypto_portfolio_carries_its_stored_value_forward() {
+        let database = test_database();
+        let mut portfolio = crypto_portfolio(vec![
+            reporting_wallet(1, 500.0),
+            reporting_wallet(2, 240.69),
+        ]);
+        record_crypto_portfolio(&database, &mut portfolio, 0).expect("healthy round");
+        let healthy_position = db::crypto_position(&database, "crypto-btc", 1).expect("position");
+
+        let mut portfolio =
+            crypto_portfolio(vec![reporting_wallet(1, 500.0), unreadable_wallet(2)]);
+        let stored = record_crypto_portfolio(&database, &mut portfolio, 0).expect("partial round");
+
+        assert!(!crypto_portfolio_is_reporting(&portfolio));
+        assert_eq!(
+            crypto_portfolio_message(&portfolio).as_deref(),
+            Some("Blockstream is unreachable")
+        );
+        assert!((stored.value - 740.69).abs() < 0.001);
+        assert!((portfolio.value - 740.69).abs() < 0.001);
+        assert_eq!(
+            db::crypto_position(&database, "crypto-btc", 1).expect("position"),
+            healthy_position
+        );
+    }
+
+    /// The headline the dashboard shows and the last point the chart draws are the same stored
+    /// sum, so an outage cannot leave the two disagreeing.
+    #[test]
+    fn the_headline_matches_the_last_stored_point_during_an_outage() {
+        let database = test_database();
+        let opessocius = db::StoredSnapshot {
+            value: 8_028.05,
+            invested: 6_000.0,
+        };
+        let mut portfolio = crypto_portfolio(vec![
+            reporting_wallet(1, 500.0),
+            reporting_wallet(2, 240.69),
+        ]);
+        let crypto = record_crypto_portfolio(&database, &mut portfolio, 0).expect("healthy crypto");
+        let trading =
+            stored_trading_snapshot(&database, SourceHealth::Reporting, 10_906.17, 9_000.0, 0)
+                .expect("healthy broker");
+        record_total(&database, trading, crypto, opessocius, 0.0, 0).expect("healthy total");
+
+        let mut portfolio = crypto_portfolio(vec![unreadable_wallet(1), unreadable_wallet(2)]);
+        let crypto = record_crypto_portfolio(&database, &mut portfolio, 0).expect("outage crypto");
+        let trading = stored_trading_snapshot(&database, SourceHealth::Failing, 0.0, 0.0, 0)
+            .expect("outage broker");
+        let headline =
+            record_total(&database, trading, crypto, opessocius, 0.0, 0).expect("outage total");
+
+        let chart = db::total_history(&database).expect("stored history");
+        assert_eq!(chart.len(), 2);
+        assert_eq!(chart.last().expect("last point").value, headline.value);
+        assert!((headline.value - 19_674.91).abs() < 0.001);
     }
 
     /// The desktop timer and any phone polling the HTTP API share one Trading 212 rate-limit
@@ -1678,6 +1992,7 @@ mod tests {
         let wallet = Wallet {
             id: 1,
             portfolio_id: 1,
+            error: None,
             network: "eth".to_string(),
             address: "0x0000000000000000000000000000000000000000".to_string(),
             display_address: "0x0000".to_string(),

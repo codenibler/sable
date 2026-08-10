@@ -49,7 +49,7 @@ pub fn backup_database(
     Ok(backup_path)
 }
 
-fn initialize(connection: &Connection) -> Result<(), String> {
+pub(crate) fn initialize(connection: &Connection) -> Result<(), String> {
     connection
         .execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -548,6 +548,7 @@ fn list_wallets(connection: &Connection, portfolio_id: i64) -> Result<Vec<Wallet
                 value: 0.0,
                 assets: Vec::new(),
                 message: None,
+                error: None,
                 last_checked_at: row.get(8)?,
             })
         })
@@ -655,21 +656,59 @@ pub fn remove_wallet(connection: &Connection, id: i64) -> Result<(), String> {
     Ok(())
 }
 
+/// What a source reported this round. A failed request and an account that was emptied on
+/// purpose both come out of the providers as a zero, and a partial crypto outage comes out as
+/// a plausible smaller number, so the value can never say which happened. Callers know, and
+/// have to say: only `Reported` numbers are written, and `Unavailable` keeps the row that is
+/// already stored.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Reading {
+    /// The provider answered. These numbers are stored as they are, a zero included.
+    Reported { value: f64, invested: f64 },
+    /// The provider could not be read, so it reported nothing at all.
+    Unavailable,
+}
+
+/// What a snapshot write actually put in the row, which is the previous reading whenever a
+/// source was unavailable. Aggregates such as the `total` row are summed in the caller, so
+/// they have to be built from these effective numbers rather than from what the providers
+/// nominally returned, or a carried-forward component never reaches them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StoredSnapshot {
+    pub value: f64,
+    pub invested: f64,
+}
+
+impl StoredSnapshot {
+    /// What a source with nothing behind it contributes to an aggregate.
+    pub const EMPTY: Self = Self {
+        value: 0.0,
+        invested: 0.0,
+    };
+}
+
+struct LatestSnapshot {
+    id: i64,
+    captured_at: String,
+    value: f64,
+    invested: f64,
+    opessocius_winnings: f64,
+    quantity: Option<f64>,
+}
+
 pub fn save_snapshot(
     connection: &Connection,
     source_kind: &str,
     source_id: i64,
-    value: f64,
-    invested: f64,
+    reading: Reading,
     opessocius_winnings: f64,
     interval_minutes: i64,
-) -> Result<(), String> {
+) -> Result<StoredSnapshot, String> {
     save_snapshot_with_quantity(
         connection,
         source_kind,
         source_id,
-        value,
-        invested,
+        reading,
         opessocius_winnings,
         None,
         interval_minutes,
@@ -680,50 +719,73 @@ pub fn save_crypto_snapshot(
     connection: &Connection,
     source_kind: &str,
     source_id: i64,
-    value: f64,
-    invested: f64,
+    reading: Reading,
     quantity: f64,
     interval_minutes: i64,
-) -> Result<(), String> {
+) -> Result<StoredSnapshot, String> {
     save_snapshot_with_quantity(
         connection,
         source_kind,
         source_id,
-        value,
-        invested,
+        reading,
         0.0,
         Some(quantity),
         interval_minutes,
     )
 }
 
+/// What an unavailable source contributes to an aggregate without writing a row of its own,
+/// for sources that are skipped entirely while their provider is failing.
+pub fn carried_forward_snapshot(
+    connection: &Connection,
+    source_kind: &str,
+    source_id: i64,
+) -> Result<StoredSnapshot, String> {
+    Ok(latest_snapshot(connection, source_kind, source_id)?.map_or(
+        StoredSnapshot::EMPTY,
+        |previous| StoredSnapshot {
+            value: previous.value,
+            invested: previous.invested,
+        },
+    ))
+}
+
 fn save_snapshot_with_quantity(
     connection: &Connection,
     source_kind: &str,
     source_id: i64,
-    value: f64,
-    invested: f64,
+    reading: Reading,
     opessocius_winnings: f64,
     quantity: Option<f64>,
     interval_minutes: i64,
-) -> Result<(), String> {
-    let last: Option<(i64, String)> = connection
-        .query_row(
-            "SELECT id, captured_at FROM snapshots
-             WHERE source_kind = ?1 AND source_id = ?2
-             ORDER BY captured_at DESC LIMIT 1",
-            params![source_kind, source_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(to_string)?;
+) -> Result<StoredSnapshot, String> {
+    let last = latest_snapshot(connection, source_kind, source_id)?;
 
-    let recent_id = last.and_then(|(id, value)| {
-        value
+    // An unavailable source repeats its previous row whole. The invested basis and the unit
+    // count come along with the value: leaving them at zero would make the next real reading
+    // look like the entire position had just been transferred in, permanently shifting the
+    // basis that returns are measured against.
+    let (value, invested, opessocius_winnings, quantity) = match (reading, last.as_ref()) {
+        (Reading::Reported { value, invested }, _) => {
+            (value, invested, opessocius_winnings, quantity)
+        }
+        (Reading::Unavailable, Some(previous)) => (
+            previous.value,
+            previous.invested,
+            previous.opessocius_winnings,
+            previous.quantity,
+        ),
+        // Nothing was reported and nothing is stored, so there is nothing to say yet.
+        (Reading::Unavailable, None) => (0.0, 0.0, 0.0, quantity.map(|_| 0.0)),
+    };
+
+    let recent_id = last.and_then(|previous| {
+        previous
+            .captured_at
             .parse::<chrono::DateTime<Utc>>()
             .ok()
             .filter(|time| Utc::now() - *time < Duration::minutes(interval_minutes))
-            .map(|_| id)
+            .map(|_| previous.id)
     });
 
     if let Some(id) = recent_id {
@@ -758,7 +820,35 @@ fn save_snapshot_with_quantity(
             )
             .map_err(to_string)?;
     }
-    Ok(())
+    Ok(StoredSnapshot { value, invested })
+}
+
+/// The row a fresh reading is measured against: the last one stored, which in the
+/// within-interval case is the very row the write is about to overwrite.
+fn latest_snapshot(
+    connection: &Connection,
+    source_kind: &str,
+    source_id: i64,
+) -> Result<Option<LatestSnapshot>, String> {
+    connection
+        .query_row(
+            "SELECT id, captured_at, value_eur, invested_eur, opessocius_winnings_eur, quantity
+             FROM snapshots WHERE source_kind = ?1 AND source_id = ?2
+             ORDER BY captured_at DESC, id DESC LIMIT 1",
+            params![source_kind, source_id],
+            |row| {
+                Ok(LatestSnapshot {
+                    id: row.get(0)?,
+                    captured_at: row.get(1)?,
+                    value: row.get(2)?,
+                    invested: row.get(3)?,
+                    opessocius_winnings: row.get(4)?,
+                    quantity: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(to_string)
 }
 
 pub fn crypto_position(
@@ -947,13 +1037,28 @@ mod tests {
     use crate::models::{CashEvent, SaveNetWorthInput};
 
     use super::{
-        add_wallet, cash_event_count, create_portfolio, crypto_position, ensure_portfolio,
-        history_sync_state, import_net_worth_history, initialize, list_net_worth_entries,
-        list_portfolios, monthly_winning, monthly_winnings, remove_net_worth_entry,
-        save_cash_events, save_crypto_snapshot, save_history_sync_state, save_monthly_winnings,
-        save_net_worth_entry, save_snapshot, simple_return_since, snapshot_baseline,
+        Reading, StoredSnapshot, add_wallet, carried_forward_snapshot, cash_event_count,
+        create_portfolio, crypto_position, ensure_portfolio, history_sync_state,
+        import_net_worth_history, initialize, list_net_worth_entries, list_portfolios,
+        monthly_winning, monthly_winnings, remove_net_worth_entry, save_cash_events,
+        save_crypto_snapshot, save_history_sync_state, save_monthly_winnings, save_net_worth_entry,
+        save_snapshot, simple_return_since, snapshot_baseline, source_history,
         update_wallet_metadata,
     };
+
+    /// The stored values for a source, oldest first. Snapshots taken with an interval of zero
+    /// minutes always insert, so a test can lay down a series of rounds without waiting.
+    fn stored_values(connection: &Connection, source_kind: &str, source_id: i64) -> Vec<f64> {
+        source_history(connection, source_kind, source_id)
+            .expect("stored history")
+            .iter()
+            .map(|point| point.value)
+            .collect()
+    }
+
+    fn reported(value: f64, invested: f64) -> Reading {
+        Reading::Reported { value, invested }
+    }
 
     #[test]
     fn imports_and_updates_net_worth_entries_by_date() {
@@ -1139,8 +1244,9 @@ mod tests {
     fn refreshes_the_current_snapshot_bucket() {
         let database = Connection::open_in_memory().expect("in-memory database");
         initialize(&database).expect("schema");
-        save_snapshot(&database, "total", 0, 10.0, 8.0, 0.0, 60).expect("first snapshot");
-        save_snapshot(&database, "total", 0, 12.0, 8.0, 0.0, 60).expect("updated snapshot");
+        save_snapshot(&database, "total", 0, reported(10.0, 8.0), 0.0, 60).expect("first snapshot");
+        save_snapshot(&database, "total", 0, reported(12.0, 8.0), 0.0, 60)
+            .expect("updated snapshot");
 
         let (count, value): (i64, f64) = database
             .query_row(
@@ -1155,10 +1261,210 @@ mod tests {
     }
 
     #[test]
+    fn carries_a_known_balance_forward_when_a_source_cannot_be_read() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        save_snapshot(&database, "portfolio", 1, reported(740.69, 500.0), 0.0, 0)
+            .expect("healthy round");
+
+        let stored = save_snapshot(&database, "portfolio", 1, Reading::Unavailable, 0.0, 0)
+            .expect("failed round");
+
+        assert_eq!(
+            stored,
+            StoredSnapshot {
+                value: 740.69,
+                invested: 500.0
+            }
+        );
+        assert_eq!(stored_values(&database, "portfolio", 1), [740.69, 740.69]);
+    }
+
+    /// A provider can stay down for many rounds, and every one of them has to repeat the last
+    /// real reading rather than let the outage compound.
+    #[test]
+    fn carries_forward_across_consecutive_failed_rounds() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        save_snapshot(&database, "portfolio", 1, reported(740.69, 500.0), 0.0, 0)
+            .expect("healthy round");
+        for round in 0..4 {
+            save_snapshot(&database, "portfolio", 1, Reading::Unavailable, 0.0, 0)
+                .unwrap_or_else(|_| panic!("failed round {round}"));
+        }
+
+        assert_eq!(
+            stored_values(&database, "portfolio", 1),
+            [740.69, 740.69, 740.69, 740.69, 740.69]
+        );
+    }
+
+    /// The carry-forward must not become permanent: a provider that answers with a zero has
+    /// emptied the account, and that zero is a real reading however long the outage before it.
+    #[test]
+    fn stores_a_zero_from_a_source_that_reports_one_after_an_outage() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        save_snapshot(&database, "portfolio", 1, reported(740.69, 500.0), 0.0, 0)
+            .expect("healthy round");
+        save_snapshot(&database, "portfolio", 1, Reading::Unavailable, 0.0, 0)
+            .expect("failed round");
+
+        let stored = save_snapshot(&database, "portfolio", 1, reported(0.0, 0.0), 0.0, 0)
+            .expect("emptied round");
+
+        assert_eq!(stored, StoredSnapshot::EMPTY);
+        assert_eq!(
+            stored_values(&database, "portfolio", 1),
+            [740.69, 740.69, 0.0]
+        );
+    }
+
+    #[test]
+    fn stores_a_zero_from_a_source_that_has_no_history_to_carry() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+
+        let stored = save_snapshot(&database, "portfolio", 1, Reading::Unavailable, 0.0, 0)
+            .expect("first round");
+
+        assert_eq!(stored, StoredSnapshot::EMPTY);
+        assert_eq!(stored_values(&database, "portfolio", 1), [0.0]);
+    }
+
+    #[test]
+    fn keeps_storing_zero_for_a_source_that_holds_nothing() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        save_snapshot(&database, "portfolio", 1, reported(0.0, 0.0), 0.0, 0).expect("first round");
+        save_snapshot(&database, "portfolio", 1, reported(0.0, 0.0), 0.0, 0).expect("second round");
+
+        assert_eq!(stored_values(&database, "portfolio", 1), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn stores_a_fresh_reading_from_a_source_that_answers() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        save_snapshot(&database, "portfolio", 1, reported(740.69, 500.0), 0.0, 0)
+            .expect("first round");
+
+        let stored = save_snapshot(&database, "portfolio", 1, reported(801.2, 500.0), 0.0, 0)
+            .expect("second round");
+
+        assert_eq!(
+            stored,
+            StoredSnapshot {
+                value: 801.2,
+                invested: 500.0
+            }
+        );
+        assert_eq!(stored_values(&database, "portfolio", 1), [740.69, 801.2]);
+    }
+
+    /// Within the snapshot interval the write overwrites the very row that holds the previous
+    /// reading, so the carry-forward has to be read out of it before it is replaced.
+    #[test]
+    fn carries_forward_while_refreshing_the_current_snapshot_bucket() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        save_snapshot(&database, "portfolio", 1, reported(740.69, 500.0), 0.0, 60)
+            .expect("healthy round");
+
+        let stored = save_snapshot(&database, "portfolio", 1, Reading::Unavailable, 0.0, 60)
+            .expect("failed round");
+
+        assert_eq!(
+            stored,
+            StoredSnapshot {
+                value: 740.69,
+                invested: 500.0
+            }
+        );
+        assert_eq!(stored_values(&database, "portfolio", 1), [740.69]);
+    }
+
+    /// Reproduces 2026-08-09 17:48, when Trading 212 and the crypto providers both answered
+    /// with nothing and the total row recorded the Opessocius balance alone as a cliff.
+    #[test]
+    fn keeps_the_total_intact_when_its_components_cannot_be_read() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        let opessocius = 8_028.05;
+
+        let trading = save_snapshot(
+            &database,
+            "trading212",
+            0,
+            reported(10_906.17, 9_000.0),
+            0.0,
+            0,
+        )
+        .expect("healthy broker");
+        let crypto = save_snapshot(&database, "portfolio", 1, reported(740.69, 600.0), 0.0, 0)
+            .expect("healthy crypto");
+        save_snapshot(
+            &database,
+            "total",
+            0,
+            reported(
+                trading.value + crypto.value + opessocius,
+                trading.invested + crypto.invested,
+            ),
+            0.0,
+            0,
+        )
+        .expect("healthy total");
+
+        // The broker is unreachable, so it is not snapshotted at all, and crypto cannot be read.
+        let trading =
+            carried_forward_snapshot(&database, "trading212", 0).expect("unreachable broker");
+        let crypto = save_snapshot(&database, "portfolio", 1, Reading::Unavailable, 0.0, 0)
+            .expect("unreadable crypto");
+        let total = save_snapshot(
+            &database,
+            "total",
+            0,
+            reported(
+                trading.value + crypto.value + opessocius,
+                trading.invested + crypto.invested,
+            ),
+            0.0,
+            0,
+        )
+        .expect("outage total");
+
+        assert!((total.value - 19_674.91).abs() < 0.001);
+        let history = stored_values(&database, "total", 0);
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1], history[0]);
+        assert_eq!(stored_values(&database, "trading212", 0), [10_906.17]);
+    }
+
+    /// The carried-forward row stands in for a reading that never arrived, so it has to keep
+    /// the units too: a zero quantity would look like the whole position had been transferred
+    /// out and would rewrite the invested basis on the next real reading.
+    #[test]
+    fn keeps_the_crypto_position_while_a_source_cannot_be_read() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        save_crypto_snapshot(&database, "crypto-eth", 1, reported(182.0, 150.0), 0.05, 0)
+            .expect("healthy round");
+
+        save_crypto_snapshot(&database, "crypto-eth", 1, Reading::Unavailable, 0.0, 0)
+            .expect("failed round");
+
+        assert_eq!(
+            crypto_position(&database, "crypto-eth", 1).unwrap(),
+            Some((150.0, Some(0.05)))
+        );
+    }
+
+    #[test]
     fn stores_crypto_quantity_with_its_invested_basis() {
         let database = Connection::open_in_memory().expect("in-memory database");
         initialize(&database).expect("schema");
-        save_crypto_snapshot(&database, "crypto-btc", 1, 120.0, 100.0, 1.0, 60)
+        save_crypto_snapshot(&database, "crypto-btc", 1, reported(120.0, 100.0), 1.0, 60)
             .expect("crypto snapshot");
 
         assert_eq!(
