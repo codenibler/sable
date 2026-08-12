@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
-# Open Sable from the app launcher: start it only if it is not already up, then show it.
+# Open Sable from the app launcher: start it only if it is not already up, then focus it.
 #
-# The window rule in hyprland.conf files every Sable window onto the `special:sable`
-# workspace, and `silent` suppresses both the focus and the workspace switch that would
-# normally follow. A window created by a launcher click is therefore real but invisible, so
-# pointing the .desktop entry straight at the AppImage looked like nothing happened while it
-# quietly stacked up instances: each duplicate loses the race for the API port yet keeps
-# running, leaving another window nobody can see and another SQLite writer on the same file.
+# Sable autostarts at login so its read-only phone API stays reachable, and the window rule in
+# hyprland.conf parks that window on workspace 9 with `silent` so it neither steals focus nor
+# drags the view across at login. It is an ordinary window on an ordinary workspace, so a
+# launcher click just has to focus it -- no special workspace, no toggle, no SUPER ALT P.
 #
-# Routing the launcher through this script makes a click do what SUPER ALT P already does.
+# Pointing the .desktop entry straight at the AppImage is still wrong: a second launch would
+# lose the race for the API port yet keep running, leaving a stray window and a second SQLite
+# writer on the same file. Going through this script keeps that to one instance.
 
 set -euo pipefail
 
 readonly HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly MONITOR="${SABLE_MONITOR:-$HERE/sable-monitor}"
 readonly ENV_FILE="${SABLE_ENV_FILE:-$(cd "$HERE/.." && pwd)/.env}"
-readonly WORKSPACE="${SABLE_WORKSPACE:-sable}"
 readonly WINDOW_TIMEOUT="${SABLE_WINDOW_TIMEOUT:-30}"
+# Case-sensitive on purpose: the AppImage reports Sable, a `cargo run` build reports sable.
+readonly WINDOW_MATCH='^[sS]able$'
 
 # `sable-monitor` already owns the single-instance rule and knows how Sable is started (setsid,
 # the missing-AppImage warning). Calling it instead of repeating any of that keeps one
-# definition of "start Sable" for the launcher, login and idle-unlock.
+# definition of "start Sable" for the launcher and for login.
 #
 # Its env-file default is a hardcoded ~/Projects/sable/.env while everything here resolves
 # against $HERE, so a moved checkout would keep launching happily and hand Sable a credentials
@@ -28,50 +29,22 @@ readonly WINDOW_TIMEOUT="${SABLE_WINDOW_TIMEOUT:-30}"
 # together; an inherited SABLE_ENV_FILE still wins.
 SABLE_ENV_FILE="$ENV_FILE" "$MONITOR"
 
-# Hyprland only knows about the window once the app has finished coming up, and revealing the
-# workspace before then shows an empty one, so give a cold start room to land — mounting the
-# AppImage's squashfs and bringing WebKitGTK up can take most of a minute on a cold cache. An
-# instance that was already running satisfies this on the first pass.
+# Hyprland only knows about the window once the app has finished coming up, so give a cold
+# start room to land -- mounting the AppImage's squashfs and bringing WebKitGTK up can take
+# most of a minute on a cold cache. An instance that was already running satisfies this on the
+# first pass.
 deadline=$((SECONDS + WINDOW_TIMEOUT))
-until hyprctl clients -j | jq -e 'any(.[]; (.class // "") | test("^[sS]able$"))' >/dev/null 2>&1; do
+until hyprctl clients -j | jq -e --arg match "$WINDOW_MATCH" \
+  'any(.[]; (.class // "") | test($match))' >/dev/null 2>&1; do
   if ((SECONDS >= deadline)); then
-    # Bailing out here would leave a window that lands a moment later stranded on the hidden
-    # workspace — the same "clicking does nothing" bug this script exists to fix. Revealing the
-    # workspace is the better guess either way: it is empty for a beat and then fills in.
-    notify-send "Sable" "No window appeared within ${WINDOW_TIMEOUT}s, revealing the workspace anyway" 2>/dev/null || true
-    echo "sable-launch: no Sable window after ${WINDOW_TIMEOUT}s, revealing $WORKSPACE anyway" >&2
-    break
+    notify-send "Sable" "No window appeared within ${WINDOW_TIMEOUT}s" 2>/dev/null || true
+    echo "sable-launch: no Sable window after ${WINDOW_TIMEOUT}s" >&2
+    exit 1
   fi
   sleep 0.2
 done
 
-# togglespecialworkspace toggles, so dispatching it blindly hides the dashboard whenever the
-# workspace happens to be up already — the opposite of what a launcher click asks for. The
-# dispatch lands on the focused monitor, so that monitor is the only one whose answer counts:
-# on a second display the dashboard may well be showing while this click still has to reveal it
-# where the user is actually looking.
-#
-# Ask, rather than infer from an exit status: a `hyprctl monitors -j` that loses a race with the
-# compositor, or a payload jq cannot read, would otherwise come back as "not shown" and toggle
-# the dashboard away. Retry a couple of times, then treat silence as unknown.
-shown=
-for _ in 1 2 3; do
-  monitors="$(hyprctl monitors -j 2>/dev/null)" || monitors=
-  shown="$(jq -r --arg ws "special:$WORKSPACE" \
-    'any(.[]; .focused and .specialWorkspace.name == $ws)' <<<"$monitors" 2>/dev/null)" || shown=
-  case "$shown" in
-  true | false) break ;;
-  *) shown= ;;
-  esac
-  sleep 0.2
-done
-
-if [ -z "$shown" ]; then
-  # Nothing is known about the current state, and both guesses are wrong half the time — but
-  # only one of them yanks away a dashboard the user just asked for. Leave it, and say why.
-  notify-send "Sable" "Hyprland did not say which workspace is showing, leaving it as it is" 2>/dev/null || true
-  echo "sable-launch: could not read hyprctl monitors, not toggling $WORKSPACE" >&2
-  exit 1
-elif [ "$shown" = "false" ]; then
-  hyprctl dispatch togglespecialworkspace "$WORKSPACE" >/dev/null
-fi
+# focuswindow follows the window to whichever workspace it is parked on, which is the whole
+# job here. Unlike the togglespecialworkspace this replaced it is idempotent: clicking the
+# launcher while Sable is already in front leaves it in front rather than hiding it again.
+hyprctl dispatch focuswindow "class:$WINDOW_MATCH" >/dev/null
