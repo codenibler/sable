@@ -113,12 +113,12 @@ pub(crate) fn initialize(connection: &Connection) -> Result<(), String> {
                 date TEXT PRIMARY KEY,
                 trading212_eur REAL NOT NULL,
                 opessocius_eur REAL NOT NULL,
-                crypto_eur REAL NOT NULL,
                 okx_eur REAL NOT NULL DEFAULT 0,
                 trezor_eur REAL NOT NULL DEFAULT 0,
                 bunq_eur REAL NOT NULL DEFAULT 0,
                 t212_spending_eur REAL NOT NULL DEFAULT 0,
                 ing_eur REAL NOT NULL DEFAULT 0,
+                joint_account_eur REAL NOT NULL DEFAULT 0,
                 receivables_eur REAL NOT NULL,
                 cash_eur REAL NOT NULL,
                 misc_eur REAL NOT NULL,
@@ -171,12 +171,17 @@ pub(crate) fn initialize(connection: &Connection) -> Result<(), String> {
         "bunq_eur",
         "t212_spending_eur",
         "ing_eur",
+        "joint_account_eur",
     ] {
         add_column_if_missing(
             connection,
             &format!("ALTER TABLE net_worth_entries ADD COLUMN {column} REAL NOT NULL DEFAULT 0"),
         )?;
     }
+    // The crypto category was retired while every recorded snapshot still held a zero there, so
+    // no balance is lost. The column is declared NOT NULL without a default in databases created
+    // before the retirement, so it has to go rather than linger: an insert that omits it fails.
+    drop_column_if_present(connection, "net_worth_entries", "crypto_eur")?;
     Ok(())
 }
 
@@ -202,20 +207,20 @@ pub fn import_net_worth_history(
         inserted += connection
             .execute(
                 "INSERT OR IGNORE INTO net_worth_entries(
-                    date, trading212_eur, opessocius_eur, crypto_eur, okx_eur, trezor_eur,
-                    bunq_eur, t212_spending_eur, ing_eur, receivables_eur, cash_eur, misc_eur,
-                    savings_eur, spending_eur, created_at, updated_at
+                    date, trading212_eur, opessocius_eur, okx_eur, trezor_eur,
+                    bunq_eur, t212_spending_eur, ing_eur, joint_account_eur, receivables_eur,
+                    cash_eur, misc_eur, savings_eur, spending_eur, created_at, updated_at
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
                 params![
                     entry.date,
                     entry.trading212,
                     entry.opessocius,
-                    entry.crypto,
                     entry.okx,
                     entry.trezor,
                     entry.bunq,
                     entry.t212_spending,
                     entry.ing,
+                    entry.joint_account,
                     entry.receivables,
                     entry.cash,
                     entry.misc,
@@ -243,19 +248,19 @@ pub fn save_net_worth_entry(
     connection
         .execute(
             "INSERT INTO net_worth_entries(
-                date, trading212_eur, opessocius_eur, crypto_eur, okx_eur, trezor_eur,
-                bunq_eur, t212_spending_eur, ing_eur, receivables_eur, cash_eur, misc_eur,
-                savings_eur, spending_eur, created_at, updated_at
+                date, trading212_eur, opessocius_eur, okx_eur, trezor_eur,
+                bunq_eur, t212_spending_eur, ing_eur, joint_account_eur, receivables_eur,
+                cash_eur, misc_eur, savings_eur, spending_eur, created_at, updated_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)
              ON CONFLICT(date) DO UPDATE SET
                 trading212_eur = excluded.trading212_eur,
                 opessocius_eur = excluded.opessocius_eur,
-                crypto_eur = excluded.crypto_eur,
                 okx_eur = excluded.okx_eur,
                 trezor_eur = excluded.trezor_eur,
                 bunq_eur = excluded.bunq_eur,
                 t212_spending_eur = excluded.t212_spending_eur,
                 ing_eur = excluded.ing_eur,
+                joint_account_eur = excluded.joint_account_eur,
                 receivables_eur = excluded.receivables_eur,
                 cash_eur = excluded.cash_eur,
                 misc_eur = excluded.misc_eur,
@@ -266,12 +271,12 @@ pub fn save_net_worth_entry(
                 entry.date,
                 entry.trading212,
                 entry.opessocius,
-                entry.crypto,
                 entry.okx,
                 entry.trezor,
                 entry.bunq,
                 entry.t212_spending,
                 entry.ing,
+                entry.joint_account,
                 entry.receivables,
                 entry.cash,
                 entry.misc,
@@ -287,9 +292,9 @@ pub fn save_net_worth_entry(
 pub fn list_net_worth_entries(connection: &Connection) -> Result<Vec<NetWorthEntry>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT date, trading212_eur, opessocius_eur, crypto_eur, okx_eur, trezor_eur,
-                    bunq_eur, t212_spending_eur, ing_eur, receivables_eur, cash_eur, misc_eur,
-                    savings_eur, spending_eur
+            "SELECT date, trading212_eur, opessocius_eur, okx_eur, trezor_eur,
+                    bunq_eur, t212_spending_eur, ing_eur, joint_account_eur, receivables_eur,
+                    cash_eur, misc_eur, savings_eur, spending_eur
              FROM net_worth_entries ORDER BY date",
         )
         .map_err(to_string)?;
@@ -299,12 +304,12 @@ pub fn list_net_worth_entries(connection: &Connection) -> Result<Vec<NetWorthEnt
                 date: row.get(0)?,
                 trading212: row.get(1)?,
                 opessocius: row.get(2)?,
-                crypto: row.get(3)?,
-                okx: row.get(4)?,
-                trezor: row.get(5)?,
-                bunq: row.get(6)?,
-                t212_spending: row.get(7)?,
-                ing: row.get(8)?,
+                okx: row.get(3)?,
+                trezor: row.get(4)?,
+                bunq: row.get(5)?,
+                t212_spending: row.get(6)?,
+                ing: row.get(7)?,
+                joint_account: row.get(8)?,
                 receivables: row.get(9)?,
                 cash: row.get(10)?,
                 misc: row.get(11)?,
@@ -316,12 +321,12 @@ pub fn list_net_worth_entries(connection: &Connection) -> Result<Vec<NetWorthEnt
                 date: entry.date,
                 trading212: entry.trading212,
                 opessocius: entry.opessocius,
-                crypto: entry.crypto,
                 okx: entry.okx,
                 trezor: entry.trezor,
                 bunq: entry.bunq,
                 t212_spending: entry.t212_spending,
                 ing: entry.ing,
+                joint_account: entry.joint_account,
                 receivables: entry.receivables,
                 cash: entry.cash,
                 misc: entry.misc,
@@ -372,6 +377,29 @@ fn rename_column_if_present(
             &format!("ALTER TABLE {table} RENAME COLUMN {from} TO {to}"),
             [],
         )
+        .map_err(to_string)?;
+    Ok(())
+}
+
+fn drop_column_if_present(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<(), String> {
+    let is_present = connection
+        .query_row(
+            "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2",
+            params![table, column],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(to_string)?
+        .is_some();
+    if !is_present {
+        return Ok(());
+    }
+    connection
+        .execute(&format!("ALTER TABLE {table} DROP COLUMN {column}"), [])
         .map_err(to_string)?;
     Ok(())
 }
@@ -1068,12 +1096,12 @@ mod tests {
             date: "2026-07-27".to_string(),
             trading212: 10_919.67,
             opessocius: 8_028.04,
-            crypto: 0.0,
             okx: 0.0,
             trezor: 0.0,
             bunq: 0.0,
             t212_spending: 0.0,
             ing: 0.0,
+            joint_account: 0.0,
             receivables: 1_033.75,
             cash: 40.0,
             misc: 0.0,
@@ -1089,12 +1117,12 @@ mod tests {
             0
         );
 
-        entry.crypto = 100.0;
+        entry.misc = 100.0;
         save_net_worth_entry(&database, &entry).unwrap();
         let entries = list_net_worth_entries(&database).unwrap();
         assert_eq!(entries.len(), 1);
         assert!((entries[0].net_worth - 20_464.31).abs() < 0.001);
-        assert_eq!(entries[0].crypto, 100.0);
+        assert_eq!(entries[0].misc, 100.0);
         remove_net_worth_entry(&database, "2026-07-27").unwrap();
         assert!(list_net_worth_entries(&database).unwrap().is_empty());
         assert_eq!(import_net_worth_history(&database, &[entry]).unwrap(), 0);
@@ -1131,7 +1159,29 @@ mod tests {
         assert_eq!(entries[0].trading212, 10_919.67);
         assert_eq!(entries[0].savings, 125.0);
         assert_eq!(entries[0].okx, 0.0);
+        assert_eq!(entries[0].joint_account, 0.0);
         assert!((entries[0].net_worth - 20_364.31).abs() < 0.001);
+
+        // The retired crypto column was NOT NULL without a default, so it has to be gone for a
+        // save that no longer supplies it to succeed on a database created before the removal.
+        let entry = SaveNetWorthInput {
+            date: "2026-07-28".to_string(),
+            trading212: 11_000.0,
+            opessocius: 8_028.04,
+            okx: 0.0,
+            trezor: 0.0,
+            bunq: 0.0,
+            t212_spending: 0.0,
+            ing: 0.0,
+            joint_account: 0.0,
+            receivables: 1_033.75,
+            cash: 40.0,
+            misc: 0.0,
+            savings: 125.0,
+            spending: 217.85,
+        };
+        save_net_worth_entry(&database, &entry).expect("save after the crypto column is dropped");
+        assert_eq!(list_net_worth_entries(&database).expect("entries").len(), 2);
     }
 
     #[test]

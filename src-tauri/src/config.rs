@@ -476,12 +476,12 @@ fn harden_private_directory(_path: &Path) -> Result<(), String> {
 const NET_WORTH_COLUMNS: [&str; 13] = [
     "trading212",
     "opessocius",
-    "crypto",
     "okx",
     "trezor",
     "bunq",
     "t212_spending",
     "ing",
+    "joint_account",
     "receivables",
     "cash",
     "misc",
@@ -489,16 +489,21 @@ const NET_WORTH_COLUMNS: [&str; 13] = [
     "spending",
 ];
 
+/// Columns dropped from the schema that older histories may still carry. They are read past
+/// rather than rejected so a file written by an earlier version still imports; every retired
+/// column was zero in every recorded snapshot, so the declared totals still reconcile.
+const RETIRED_NET_WORTH_COLUMNS: [&str; 1] = ["crypto"];
+
 fn net_worth_amounts(entry: &NetWorthEntry) -> [f64; 13] {
     [
         entry.trading212,
         entry.opessocius,
-        entry.crypto,
         entry.okx,
         entry.trezor,
         entry.bunq,
         entry.t212_spending,
         entry.ing,
+        entry.joint_account,
         entry.receivables,
         entry.cash,
         entry.misc,
@@ -512,14 +517,18 @@ fn parse_net_worth_history(key: &str, contents: &str) -> Result<Vec<SaveNetWorth
     let Some((_, header_line)) = lines.next() else {
         return Ok(Vec::new());
     };
-    // Columns are located by name so histories written before a category was renamed or
-    // added still import: "stocks" is the former name of the Trading 212 column.
+    // Columns are located by name so histories written before a category was renamed, added or
+    // retired still import: "stocks" is the former name of the Trading 212 column, and the
+    // retired columns are read past without contributing to the total.
     let header = header_line.split(',').map(str::trim).collect::<Vec<_>>();
     if header.first() != Some(&"date") || header.get(1) != Some(&"net_worth") {
         return Err(format!("{key} must start with date,net_worth columns"));
     }
     for column in &header[2..] {
-        if !NET_WORTH_COLUMNS.contains(column) && *column != "stocks" {
+        if !NET_WORTH_COLUMNS.contains(column)
+            && !RETIRED_NET_WORTH_COLUMNS.contains(column)
+            && *column != "stocks"
+        {
             return Err(format!("{key} has an unknown column {column}"));
         }
     }
@@ -555,12 +564,14 @@ fn parse_net_worth_history(key: &str, contents: &str) -> Result<Vec<SaveNetWorth
             date,
             trading212: amount("trading212")?,
             opessocius: amount("opessocius")?,
-            crypto: amount("crypto")?,
             okx: amount("okx")?,
             trezor: amount("trezor")?,
             bunq: amount("bunq")?,
             t212_spending: amount("t212_spending")?,
             ing: amount("ing")?,
+            // `amount` reads a missing column as zero, so a history written before this category
+            // existed still imports and reconciles against its declared total.
+            joint_account: amount("joint_account")?,
             receivables: amount("receivables")?,
             cash: amount("cash")?,
             misc: amount("misc")?,
@@ -804,12 +815,12 @@ mod tests {
             net_worth: 20_364.31,
             trading212: 10_919.67,
             opessocius: 8_028.04,
-            crypto: 0.0,
             okx: 0.0,
             trezor: 0.0,
             bunq: 0.0,
             t212_spending: 0.0,
             ing: 0.0,
+            joint_account: 0.0,
             receivables: 1_033.75,
             cash: 40.0,
             misc: 0.0,
@@ -835,12 +846,30 @@ mod tests {
     fn parses_private_net_worth_history_and_validates_the_total() {
         let entries = parse_net_worth_history(
             "NET_WORTH_HISTORY_FILE",
+            "date,net_worth,trading212,opessocius,okx,trezor,bunq,t212_spending,ing,\
+             joint_account,receivables,cash,misc,savings,spending\n\
+             2026-07-27,20614.31,10919.67,8028.04,0,0,0,0,0,250,1033.75,40,0,125,217.85\n",
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!((entries[0].net_worth() - 20_614.31).abs() < 0.001);
+        assert_eq!(entries[0].joint_account, 250.0);
+        assert_eq!(entries[0].receivables, 1_033.75);
+    }
+
+    /// A history written before the crypto category was retired and before the joint account was
+    /// added must still import: the dropped column is read past, and the absent one reads as zero.
+    #[test]
+    fn reads_a_history_written_before_crypto_was_retired_and_the_joint_account_added() {
+        let entries = parse_net_worth_history(
+            "NET_WORTH_HISTORY_FILE",
             "date,net_worth,trading212,opessocius,crypto,okx,trezor,bunq,t212_spending,ing,\
              receivables,cash,misc,savings,spending\n\
              2026-07-27,20364.31,10919.67,8028.04,0,0,0,0,0,0,1033.75,40,0,125,217.85\n",
         )
         .unwrap();
         assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].joint_account, 0.0);
         assert!((entries[0].net_worth() - 20_364.31).abs() < 0.001);
         assert_eq!(entries[0].receivables, 1_033.75);
     }

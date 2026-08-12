@@ -150,12 +150,12 @@ export type NetWorthEntry = {
   netWorth: number;
   trading212: number;
   opessocius: number;
-  crypto: number;
   okx: number;
   trezor: number;
   bunq: number;
   t212Spending: number;
   ing: number;
+  jointAccount: number;
   receivables: number;
   cash: number;
   misc: number;

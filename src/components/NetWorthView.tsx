@@ -4,7 +4,7 @@ import { api } from "../api";
 import { isDesktop } from "../platform";
 import type { NetWorthEntry, SaveNetWorthInput } from "../types";
 
-type CategoryKey = "trading212" | "opessocius" | "crypto" | "okx" | "trezor" | "bunq" | "t212Spending" | "ing" | "receivables" | "cash" | "misc" | "savings" | "spending";
+type CategoryKey = "trading212" | "opessocius" | "okx" | "trezor" | "bunq" | "t212Spending" | "ing" | "jointAccount" | "receivables" | "cash" | "misc" | "savings" | "spending";
 
 type Category = { key: CategoryKey; label: string; color: string; retired?: boolean };
 
@@ -12,11 +12,11 @@ const categories: Category[] = [
   { key: "trading212", label: "Trading 212", color: "#d8b76b" },
   { key: "t212Spending", label: "T212 Spending", color: "#b8964f" },
   { key: "opessocius", label: "Opessocius", color: "#76b7a8" },
-  { key: "crypto", label: "Crypto", color: "#a78bdb" },
   { key: "okx", label: "OKX", color: "#7f8fc9" },
   { key: "trezor", label: "Trezor", color: "#6bb8c4" },
   { key: "bunq", label: "Bunq", color: "#9fc06a" },
   { key: "ing", label: "ING", color: "#c9713f" },
+  { key: "jointAccount", label: "Joint Account", color: "#a78bdb" },
   { key: "receivables", label: "Receivables", color: "#d69c61" },
   { key: "cash", label: "Cash", color: "#72ad79" },
   { key: "misc", label: "Misc", color: "#bd829b" },
