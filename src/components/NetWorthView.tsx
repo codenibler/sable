@@ -40,8 +40,8 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
   // Hooks run before the empty-state return below, so this must tolerate no entries at all --
   // calculateAnalytics reads entries.at(-1) unconditionally.
   const analytics = useMemo(
-    () => (entries.length ? calculateAnalytics(entries, visibleCategories) : null),
-    [entries, visibleCategories],
+    () => (entries.length ? calculateAnalytics(entries) : null),
+    [entries],
   );
   const selected = entries.find((entry) => entry.date === selectedDate) ?? entries.at(-1);
 
@@ -95,19 +95,13 @@ export function NetWorthView({ entries, formatMoney, onChanged }: { entries: Net
       <div className="net-worth-chart-legend"><span>Bars start at zero</span><span>{entries.length} snapshots · {Math.round(analytics.elapsedDays)} days</span></div>
     </section>
 
-    <section className="net-worth-lower-grid">
-      <div className="panel allocation-panel">
-        <div className="panel-heading"><div><p className="section-label">Latest snapshot</p><h2>Allocation</h2></div><span className="muted">{formatDate(latest.date)}</span></div>
-        <div className="net-worth-allocation-list">{analytics.allocation.map((category) => <div className="net-worth-allocation" key={category.key}><div><span>{category.label}</span><strong>{formatMoney(category.value)}</strong></div><i><b style={{ width: `${category.percent}%` }} /></i><small>{category.percent.toFixed(1)}%</small></div>)}</div>
-      </div>
-      <div className="panel growth-insights-panel">
-        <div className="panel-heading"><div><p className="section-label">Analytics</p><h2>Growth signals</h2></div></div>
-        <div className="growth-insights">
-          <Insight label="Average change" value={formatMoney(analytics.averageChange)} note="per recorded snapshot" positive={analytics.averageChange >= 0} />
-          <Insight label="Largest increase" value={`+${formatMoney(analytics.best.amount)}`} note={analytics.best.date ? formatDate(analytics.best.date) : "—"} positive />
-          <Insight label="Largest decrease" value={formatMoney(analytics.worst.amount)} note={analytics.worst.date ? formatDate(analytics.worst.date) : "—"} positive={analytics.worst.amount >= 0} />
-          <Insight label="Current streak" value={`${analytics.streak} ${analytics.streakDirection}`} note="consecutive snapshots" positive={analytics.streakDirection === "gains"} />
-        </div>
+    <section className="panel growth-insights-panel">
+      <div className="panel-heading"><div><p className="section-label">Analytics</p><h2>Growth signals</h2></div></div>
+      <div className="growth-insights">
+        <Insight label="Average change" value={formatMoney(analytics.averageChange)} note="per recorded snapshot" positive={analytics.averageChange >= 0} />
+        <Insight label="Largest increase" value={`+${formatMoney(analytics.best.amount)}`} note={analytics.best.date ? formatDate(analytics.best.date) : "—"} positive />
+        <Insight label="Largest decrease" value={formatMoney(analytics.worst.amount)} note={analytics.worst.date ? formatDate(analytics.worst.date) : "—"} positive={analytics.worst.amount >= 0} />
+        <Insight label="Current streak" value={`${analytics.streak} ${analytics.streakDirection}`} note="consecutive snapshots" positive={analytics.streakDirection === "gains"} />
       </div>
     </section>
     <CompositionCharts entries={entries} latest={latest} categories={visibleCategories} formatMoney={formatMoney} />
@@ -236,7 +230,7 @@ function NetWorthModal({ entry, latest, formatMoney, onClose, onSaved }: { entry
   </form></div></div>;
 }
 
-function calculateAnalytics(entries: NetWorthEntry[], categories: Category[]) {
+function calculateAnalytics(entries: NetWorthEntry[]) {
   const latest = entries.at(-1)!;
   const previous = entries.at(-2);
   const first = entries[0];
@@ -255,7 +249,6 @@ function calculateAnalytics(entries: NetWorthEntry[], categories: Category[]) {
     if ((change.amount >= 0 ? 1 : -1) !== latestDirection) break;
     streak += 1;
   }
-  const allocation = categories.map((category) => ({ ...category, value: latest[category.key], percent: latest.netWorth > 0 ? latest[category.key] / latest.netWorth * 100 : 0 })).sort((left, right) => right.value - left.value);
   return {
     latestChange,
     latestChangePercent: previous?.netWorth ? latestChange / previous.netWorth * 100 : 0,
@@ -269,7 +262,6 @@ function calculateAnalytics(entries: NetWorthEntry[], categories: Category[]) {
     worst,
     high,
     elapsedDays,
-    allocation,
     streak,
     streakDirection: latestDirection > 0 ? "gains" : "declines",
   };

@@ -219,16 +219,6 @@ tbody tr:last-child td { border-bottom: 0; }
 .net-worth-bar-column > small { align-self: start; justify-self: center; padding-top: 8px; color: #5e6460; font-size: .64rem; white-space: nowrap; }
 .net-worth-bar-column.selected > small { color: #a4a9a5; }
 .net-worth-chart-legend { display: flex; justify-content: space-between; gap: 20px; padding: 11px 22px 14px; border-top: 1px solid var(--line-soft); color: #555a57; font-size: var(--font-caption); }
-.net-worth-lower-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); gap: 16px; }
-.net-worth-allocation-list { display: grid; padding: 7px 22px 15px; }
-.net-worth-allocation { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(90px, 1.2fr) 47px; align-items: center; gap: 13px; min-height: 48px; border-bottom: 1px solid var(--line-soft); }
-.net-worth-allocation:last-child { border-bottom: 0; }
-.net-worth-allocation > div { display: flex; justify-content: space-between; gap: 14px; font-size: var(--font-small); font-variant-numeric: tabular-nums; }
-.net-worth-allocation > div span { color: #858a86; }
-.net-worth-allocation > div strong { font-weight: 500; }
-.net-worth-allocation > i { height: 3px; overflow: hidden; border-radius: 99px; background: #242725; }
-.net-worth-allocation > i b { display: block; height: 100%; border-radius: inherit; background: var(--gold); opacity: .62; }
-.net-worth-allocation > small { color: #626764; font-size: var(--font-caption); text-align: right; }
 .growth-insights { display: grid; grid-template-columns: 1fr 1fr; }
 .growth-insight { min-height: 105px; display: grid; align-content: center; padding: 17px 19px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
 .growth-insight:nth-child(even) { border-right: 0; }
@@ -381,7 +371,6 @@ tbody tr:last-child td { border-bottom: 0; }
   .balance { font-size: var(--font-value); }
   .lower-grid { grid-template-columns: 1fr; }
   .asset-selector { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .net-worth-lower-grid { grid-template-columns: 1fr; }
   .composition-grid { grid-template-columns: 1fr; }
   .composition-history { border-right: 0; border-bottom: 1px solid var(--line-soft); }
 }
@@ -448,9 +437,6 @@ tbody tr:last-child td { border-bottom: 0; }
   .asset-selector { grid-template-columns: 1fr; }
   .asset-select { min-height: 76px; }
   .net-worth-fields { grid-template-columns: 1fr; }
-  .net-worth-allocation { grid-template-columns: 1fr 45px; }
-  .net-worth-allocation > i { grid-column: 1; }
-  .net-worth-allocation > small { grid-column: 2; grid-row: 1 / span 2; }
   .growth-insights { grid-template-columns: 1fr; }
   .growth-insight, .growth-insight:nth-child(even), .growth-insight:nth-last-child(-n + 2) { border-right: 0; border-bottom: 1px solid var(--line-soft); }
   .growth-insight:last-child { border-bottom: 0; }
