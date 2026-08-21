@@ -120,22 +120,53 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
         db::cash_history_summary(&database)?
     };
     let (return_month_start, return_month_label) = return_month(Local::now())?;
+    let (net_worth_entries, opessocius_deposits) = {
+        let database = state.database.lock().map_err(|_| "Database lock failed")?;
+        (
+            db::list_net_worth_entries(&database)?,
+            db::list_opessocius_deposits(&database)?,
+        )
+    };
+    // The net worth monitor is where this investment's balance is written down by hand, so its
+    // latest Opessocius figure is what the investment is worth today. The default monthly rate
+    // only fills in the months that snapshot has not reached yet.
+    let opessocius_anchor = opessocius_anchor(&state.config, &net_worth_entries)?;
+    let opessocius_balance = opessocius_anchor
+        .as_ref()
+        .map(|anchor| anchor.value)
+        .unwrap_or(state.config.opessocius_current_balance);
+    let winnings_start_month = opessocius_winnings_start(&state.config, opessocius_anchor.as_ref());
+    // Money paid in after the snapshot was taken is in the account but not in its figure, so the
+    // value has to carry it; anything paid in earlier is already inside the snapshot.
+    let paid_in_since_balance = |until: Option<&str>| -> f64 {
+        opessocius_deposits
+            .iter()
+            .filter(|deposit| {
+                opessocius_anchor
+                    .as_ref()
+                    .is_none_or(|anchor| deposit.date > anchor.date)
+                    && until.is_none_or(|limit| deposit.date.as_str() < limit)
+            })
+            .map(|deposit| deposit.amount)
+            .sum()
+    };
     let (opessocius_winnings, editable_opessocius_return) = {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
-        if return_month_start >= state.config.opessocius_return_start_month {
+        if return_month_start >= winnings_start_month {
             ensure_default_monthly_returns(
                 &database,
-                state.config.opessocius_current_balance,
+                // Later deposits compound from the month they land in, not before it.
+                opessocius_balance + paid_in_since_balance(Some(&winnings_start_month)),
                 state.config.opessocius_monthly_return_rate,
-                &state.config.opessocius_return_start_month,
+                &winnings_start_month,
                 &return_month_start,
             )?;
         }
         let winnings = db::monthly_winnings(&database, OPESSOCIUS_SOURCE)?
             .into_iter()
-            .filter(|(month, _)| month >= &state.config.opessocius_return_start_month)
+            .filter(|(month, _)| month >= &winnings_start_month)
             .collect::<Vec<_>>();
-        let editable = if return_month_start >= state.config.opessocius_return_start_month {
+        let editable = if return_month_start >= winnings_start_month {
             db::monthly_winning(&database, OPESSOCIUS_SOURCE, &return_month_start)?.map(
                 |(amount, is_override)| MonthlyWinnings {
                     month: return_month_start.clone(),
@@ -275,16 +306,27 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
         message: trading_message,
     });
 
-    let opessocius_value = state.config.opessocius_current_balance + total_opessocius_winnings;
-    let opessocius_invested = state.config.opessocius_net_deposits;
+    let opessocius_value =
+        opessocius_balance + paid_in_since_balance(None) + total_opessocius_winnings;
+    let opessocius_invested = state.config.opessocius_net_deposits
+        + opessocius_deposits
+            .iter()
+            .map(|deposit| deposit.amount)
+            .sum::<f64>();
     let opessocius_return = opessocius_value - opessocius_invested;
-    let opessocius_history_through = state
-        .config
-        .opessocius_history
-        .last()
-        .map(|row| month_label(&row.month))
-        .transpose()?
-        .unwrap_or_else(|| "baseline".to_string());
+    let opessocius_valued_from = match &opessocius_anchor {
+        Some(anchor) => format!("net worth snapshot {}", snapshot_label(&anchor.date)?),
+        None => format!(
+            "history through {}",
+            state
+                .config
+                .opessocius_history
+                .last()
+                .map(|row| month_label(&row.month))
+                .transpose()?
+                .unwrap_or_else(|| "baseline".to_string()),
+        ),
+    };
     sources.push(SourceSummary {
         id: "opessocius".to_string(),
         name: state.config.opessocius_name.clone(),
@@ -301,8 +343,8 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
                 format!("manual {return_month_label} override")
             } else {
                 format!(
-                    "history through {} · {:.2}% monthly thereafter",
-                    opessocius_history_through,
+                    "{} · {:.2}% monthly thereafter",
+                    opessocius_valued_from,
                     state.config.opessocius_monthly_return_rate * 100.0,
                 )
             },
@@ -471,13 +513,17 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
         state.config.snapshot_interval_minutes,
     );
 
-    let (opessocius_history, opessocius_periods) =
-        opessocius_portfolio_history(&state.config, &opessocius_winnings)?;
+    let (opessocius_history, opessocius_periods) = opessocius_portfolio_history(
+        &state.config,
+        opessocius_anchor.as_ref(),
+        &opessocius_deposits,
+        &opessocius_winnings,
+    )?;
     let trading_history = {
         let database = state.database.lock().map_err(|_| "Database lock failed")?;
         let live_history = db::source_history(&database, "trading212", 0)?;
-        let historical = db::list_net_worth_entries(&database)?
-            .into_iter()
+        let historical = net_worth_entries
+            .iter()
             .map(|entry| {
                 let invested = if history_is_usable {
                     0.0
@@ -531,7 +577,13 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
             item_label: "monthly records".to_string(),
             periods: opessocius_periods,
             connected: true,
-            message: Some("Authoritative local history".to_string()),
+            message: Some(match &opessocius_anchor {
+                Some(anchor) => format!(
+                    "Valued from the net worth snapshot of {}",
+                    snapshot_label(&anchor.date)?
+                ),
+                None => "Authoritative local history".to_string(),
+            }),
         },
     ];
     {
@@ -588,6 +640,7 @@ async fn build_dashboard(state: &AppState) -> Result<Dashboard, String> {
         monthly_return,
         yearly_return,
         opessocius_monthly_return: editable_opessocius_return,
+        opessocius_deposits,
         net_contributions: cash_history.net_contributions + opessocius_invested,
         history_event_count: cash_history.event_count,
         history_backfill_complete: cash_history.backfill_complete,
@@ -613,24 +666,32 @@ fn percent_of(amount: f64, basis: f64) -> f64 {
 
 fn demo_trading_overview() -> crate::models::TradingOverview {
     let holdings = [
-        ("VWCE", "Vanguard FTSE All-World ETF", 18_000.0, 16_000.0, 180.0),
+        (
+            "VWCE",
+            "Vanguard FTSE All-World ETF",
+            18_000.0,
+            16_000.0,
+            180.0,
+        ),
         ("MSFT", "Microsoft", 12_000.0, 9_800.0, 48.0),
         ("ASML", "ASML Holding", 9_000.0, 7_600.0, 12.0),
         ("NVDA", "NVIDIA", 6_000.0, 5_600.0, 40.0),
     ]
     .into_iter()
     .enumerate()
-    .map(|(index, (symbol, name, value, invested, quantity))| Holding {
-        id: format!("demo-t212-{index}"),
-        symbol: symbol.to_string(),
-        name: name.to_string(),
-        source: "Trading 212".to_string(),
-        quantity,
-        price: value / quantity,
-        value,
-        return_value: value - invested,
-        allocation: 0.0,
-    })
+    .map(
+        |(index, (symbol, name, value, invested, quantity))| Holding {
+            id: format!("demo-t212-{index}"),
+            symbol: symbol.to_string(),
+            name: name.to_string(),
+            source: "Trading 212".to_string(),
+            quantity,
+            price: value / quantity,
+            value,
+            return_value: value - invested,
+            allocation: 0.0,
+        },
+    )
     .collect();
     crate::models::TradingOverview {
         total_value: 50_000.0,
@@ -1088,8 +1149,57 @@ fn extend_asset_history_to(history: &mut Vec<crate::models::DataPoint>, started_
     );
 }
 
+/// The most recent Opessocius balance the net worth monitor holds, which is the investment's
+/// current value.
+struct OpessociusAnchor {
+    date: String,
+    month: String,
+    next_month: String,
+    value: f64,
+}
+
+/// A snapshot only speaks for the investment once it is newer than the authoritative monthly
+/// history; an older one would talk over figures that are already settled.
+fn opessocius_anchor(
+    config: &Config,
+    entries: &[NetWorthEntry],
+) -> Result<Option<OpessociusAnchor>, String> {
+    let Some(entry) = entries.iter().rev().find(|entry| entry.opessocius > 0.0) else {
+        return Ok(None);
+    };
+    let date = NaiveDate::parse_from_str(&entry.date, "%Y-%m-%d")
+        .map_err(|_| "A net worth snapshot carries an invalid date".to_string())?;
+    let month = NaiveDate::from_ymd_opt(date.year(), date.month(), 1)
+        .ok_or("Could not determine the month of a net worth snapshot")?;
+    let month_start = month.format("%Y-%m-%d").to_string();
+    if config
+        .opessocius_history
+        .last()
+        .is_some_and(|row| row.month >= month_start)
+    {
+        return Ok(None);
+    }
+    Ok(Some(OpessociusAnchor {
+        date: entry.date.clone(),
+        next_month: next_month_start(month)?.format("%Y-%m-%d").to_string(),
+        month: month_start,
+        value: entry.opessocius,
+    }))
+}
+
+/// Months the snapshot already covers earn no automatic return, or the same growth would be
+/// counted twice.
+fn opessocius_winnings_start(config: &Config, anchor: Option<&OpessociusAnchor>) -> String {
+    anchor
+        .map(|anchor| anchor.next_month.clone())
+        .filter(|month| month > &config.opessocius_return_start_month)
+        .unwrap_or_else(|| config.opessocius_return_start_month.clone())
+}
+
 fn opessocius_portfolio_history(
     config: &Config,
+    anchor: Option<&OpessociusAnchor>,
+    deposits: &[crate::models::OpessociusDeposit],
     automatic_returns: &[(String, f64)],
 ) -> Result<(Vec<crate::models::DataPoint>, Vec<PortfolioPeriod>), String> {
     let mut history = Vec::new();
@@ -1119,32 +1229,139 @@ fn opessocius_portfolio_history(
         });
     }
 
-    let mut value = config.opessocius_current_balance;
+    // What happened after that history, in the order it happened: the balance the net worth
+    // monitor recorded, money paid in or taken out, and each month's return credited at its
+    // close. Walking them in date order is what lets a deposit be told apart from growth --
+    // it moves the value without ever counting as return.
+    let mut steps = Vec::new();
+    if let Some(anchor) = anchor {
+        steps.push(OpessociusStep {
+            moment: dated_moment(&anchor.date)?,
+            timestamp: format!("{}T12:00:00Z", anchor.date),
+            month: anchor.month.clone(),
+            change: OpessociusChange::Snapshot(anchor.value),
+        });
+    }
+    for deposit in deposits {
+        steps.push(OpessociusStep {
+            moment: dated_moment(&deposit.date)?,
+            timestamp: format!("{}T12:00:00Z", deposit.date),
+            month: month_start_of(&deposit.date)?,
+            change: OpessociusChange::Deposit(deposit.amount),
+        });
+    }
     for (month, amount) in automatic_returns {
-        let opening = value;
-        value += amount;
-        history.push(crate::models::DataPoint {
+        steps.push(OpessociusStep {
+            moment: month_end_moment(month)?,
             timestamp: month_end_timestamp(month)?,
+            month: month.clone(),
+            change: OpessociusChange::Winnings(*amount),
+        });
+    }
+    steps.sort_by_key(|step| step.moment);
+
+    let mut value = config.opessocius_current_balance;
+    let mut recorded = config.opessocius_net_deposits;
+    let mut open: Option<(f64, PortfolioPeriod)> = None;
+    for step in steps {
+        if open
+            .as_ref()
+            .is_some_and(|(_, row)| row.month != step.month)
+        {
+            periods.push(open.take().expect("checked above").1);
+        }
+        let (opening, row) = match open {
+            Some(ref mut open) => open,
+            None => open.insert((
+                value,
+                PortfolioPeriod {
+                    month: step.month.clone(),
+                    label: month_label(&step.month)?,
+                    return_percent: 0.0,
+                    return_value: 0.0,
+                    deposits: 0.0,
+                    withdrawals: 0.0,
+                    ending_value: value,
+                },
+            )),
+        };
+        match step.change {
+            // The snapshot is the truth about the balance, so whatever it moved that the
+            // deposits above do not explain is this month's growth.
+            OpessociusChange::Snapshot(balance) => {
+                row.return_value += balance - value;
+                value = balance;
+            }
+            OpessociusChange::Deposit(amount) => {
+                if amount >= 0.0 {
+                    row.deposits += amount;
+                } else {
+                    row.withdrawals -= amount;
+                }
+                value += amount;
+                recorded += amount;
+            }
+            OpessociusChange::Winnings(amount) => {
+                row.return_value += amount;
+                value += amount;
+            }
+        }
+        row.ending_value = value;
+        row.return_percent = percent_of(row.return_value, *opening);
+        history.push(crate::models::DataPoint {
+            timestamp: step.timestamp,
             value,
-            invested: config.opessocius_net_deposits,
+            invested: recorded,
             opessocius_winnings: 0.0,
         });
-        periods.push(PortfolioPeriod {
-            month: month.clone(),
-            label: month_label(month)?,
-            return_percent: percent_of(*amount, opening),
-            return_value: *amount,
-            deposits: 0.0,
-            withdrawals: 0.0,
-            ending_value: value,
-        });
+    }
+    if let Some((_, row)) = open {
+        periods.push(row);
     }
     Ok((history, periods))
 }
 
-fn month_end_timestamp(month: &str) -> Result<String, String> {
+struct OpessociusStep {
+    moment: DateTime<Utc>,
+    timestamp: String,
+    month: String,
+    change: OpessociusChange,
+}
+
+enum OpessociusChange {
+    Snapshot(f64),
+    Deposit(f64),
+    Winnings(f64),
+}
+
+/// Midday, so a day's events sort inside their own day whichever way the offset falls.
+fn dated_moment(date: &str) -> Result<DateTime<Utc>, String> {
+    format!("{date}T12:00:00Z")
+        .parse::<DateTime<Utc>>()
+        .map_err(|_| "A dated Opessocius record carries an invalid date".to_string())
+}
+
+fn month_start_of(date: &str) -> Result<String, String> {
+    let date = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|_| "A dated Opessocius record carries an invalid date".to_string())?;
+    NaiveDate::from_ymd_opt(date.year(), date.month(), 1)
+        .map(|month| month.format("%Y-%m-%d").to_string())
+        .ok_or_else(|| "Could not determine the month of an Opessocius record".to_string())
+}
+
+fn month_end_moment(month: &str) -> Result<DateTime<Utc>, String> {
     let (_, end) = month_bounds(month)?;
-    Ok((end - Duration::seconds(1)).to_rfc3339())
+    Ok(end - Duration::seconds(1))
+}
+
+fn month_end_timestamp(month: &str) -> Result<String, String> {
+    Ok(month_end_moment(month)?.to_rfc3339())
+}
+
+fn snapshot_label(date: &str) -> Result<String, String> {
+    NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map(|date| date.format("%-d %B %Y").to_string())
+        .map_err(|_| "A net worth snapshot carries an invalid date".to_string())
 }
 
 fn month_label(month: &str) -> Result<String, String> {
@@ -1377,11 +1594,53 @@ pub fn set_opessocius_monthly_return(
         return Err("There is no automatic Opessocius return to override yet".to_string());
     }
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
+    let anchor = opessocius_anchor(&state.config, &db::list_net_worth_entries(&database)?)?;
+    if month_start < opessocius_winnings_start(&state.config, anchor.as_ref()) {
+        return Err("The net worth monitor already values Opessocius for this month".to_string());
+    }
     db::save_monthly_winnings(&database, OPESSOCIUS_SOURCE, &month_start, amount, true)
 }
 
+/// Deposits and withdrawals are recorded against a date so the ledger can tell money paid in
+/// apart from money earned. A withdrawal is a negative amount.
 #[tauri::command]
-pub fn list_crypto_portfolios(state: State<'_, Arc<AppState>>) -> Result<Vec<CryptoPortfolio>, String> {
+pub fn add_opessocius_deposit(
+    state: State<'_, Arc<AppState>>,
+    date: String,
+    amount: f64,
+) -> Result<i64, String> {
+    if !amount.is_finite() || amount == 0.0 {
+        return Err("Enter an amount paid in, or a negative amount for a withdrawal".to_string());
+    }
+    let parsed = NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+        .map_err(|_| "Deposit date must use YYYY-MM-DD format".to_string())?;
+    if parsed.format("%Y-%m-%d").to_string() != date {
+        return Err("Deposit date must use YYYY-MM-DD format".to_string());
+    }
+    // The monthly history already counts what was paid in while it was running, so a date
+    // inside it would raise the invested capital twice.
+    if let Some(row) = state.config.opessocius_history.last()
+        && month_start_of(&date)? <= row.month
+    {
+        return Err(format!(
+            "The monthly history already accounts for deposits up to {}",
+            month_label(&row.month)?
+        ));
+    }
+    let database = state.database.lock().map_err(|_| "Database lock failed")?;
+    db::add_opessocius_deposit(&database, &date, amount)
+}
+
+#[tauri::command]
+pub fn remove_opessocius_deposit(state: State<'_, Arc<AppState>>, id: i64) -> Result<(), String> {
+    let database = state.database.lock().map_err(|_| "Database lock failed")?;
+    db::remove_opessocius_deposit(&database, id)
+}
+
+#[tauri::command]
+pub fn list_crypto_portfolios(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<CryptoPortfolio>, String> {
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
     db::list_portfolios(&database)
 }
@@ -1419,7 +1678,9 @@ pub fn remove_wallet(state: State<'_, Arc<AppState>>, id: i64) -> Result<(), Str
 }
 
 #[tauri::command]
-pub fn list_net_worth_entries(state: State<'_, Arc<AppState>>) -> Result<Vec<NetWorthEntry>, String> {
+pub fn list_net_worth_entries(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<NetWorthEntry>, String> {
     let database = state.database.lock().map_err(|_| "Database lock failed")?;
     db::list_net_worth_entries(&database)
 }
@@ -1473,14 +1734,18 @@ mod tests {
         crypto_invested_basis, crypto_portfolio_baseline, crypto_portfolio_is_reporting,
         crypto_portfolio_message, distributed_winnings, extend_asset_history_to,
         grouped_crypto_assets, include_configured_tokens_from_portfolio_start,
-        merge_historical_trading212_with_live_history, month_bounds,
-        planned_default_monthly_returns, rebuild_cash_position_history, record_crypto_portfolio,
-        record_total, return_month, stored_trading_snapshot, trading_source_health,
+        merge_historical_trading212_with_live_history, month_bounds, opessocius_anchor,
+        opessocius_portfolio_history, opessocius_winnings_start, planned_default_monthly_returns,
+        rebuild_cash_position_history, record_crypto_portfolio, record_total, return_month,
+        stored_trading_snapshot, trading_source_health,
     };
     use crate::{
-        config::EthereumTokenConfig,
+        config::{Config, EthereumTokenConfig, OpessociusHistoryRow},
         db,
-        models::{CryptoAsset, CryptoPortfolio, DataPoint, Wallet, WalletAsset},
+        models::{
+            CryptoAsset, CryptoPortfolio, DataPoint, NetWorthEntry, OpessociusDeposit, Wallet,
+            WalletAsset,
+        },
     };
     use chrono::{Local, TimeZone};
     use rusqlite::Connection;
@@ -1505,6 +1770,7 @@ mod tests {
                 percent: 0.0,
             },
             opessocius_monthly_return: None,
+            opessocius_deposits: Vec::new(),
             net_contributions: 0.0,
             history_event_count: 0,
             history_backfill_complete: false,
@@ -1731,15 +1997,19 @@ mod tests {
         let cache = tokio::sync::Mutex::new(None);
         let lifetime = StdDuration::from_secs(3_600);
 
-        let first = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(1.0)) })
-            .await
-            .unwrap();
+        let first = cached_dashboard(&cache, lifetime, false, || async {
+            Ok(stub_dashboard(1.0))
+        })
+        .await
+        .unwrap();
         assert_eq!(first.total_value, 1.0);
 
         // Unforced: the fresh entry wins and the builder never runs.
-        let cached = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(2.0)) })
-            .await
-            .unwrap();
+        let cached = cached_dashboard(&cache, lifetime, false, || async {
+            Ok(stub_dashboard(2.0))
+        })
+        .await
+        .unwrap();
         assert_eq!(cached.total_value, 1.0);
 
         // Forced, as the desktop refresh button does.
@@ -1757,9 +2027,10 @@ mod tests {
         cached_dashboard(&cache, expired, false, || async { Ok(stub_dashboard(1.0)) })
             .await
             .unwrap();
-        let rebuilt = cached_dashboard(&cache, expired, false, || async { Ok(stub_dashboard(2.0)) })
-            .await
-            .unwrap();
+        let rebuilt =
+            cached_dashboard(&cache, expired, false, || async { Ok(stub_dashboard(2.0)) })
+                .await
+                .unwrap();
         assert_eq!(rebuilt.total_value, 2.0);
     }
 
@@ -1774,9 +2045,11 @@ mod tests {
             dashboard: stub_dashboard(1.0),
         }));
 
-        let rebuilt = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(2.0)) })
-            .await
-            .unwrap();
+        let rebuilt = cached_dashboard(&cache, lifetime, false, || async {
+            Ok(stub_dashboard(2.0))
+        })
+        .await
+        .unwrap();
         assert_eq!(
             rebuilt.total_value, 2.0,
             "an eight-hour-old snapshot must not survive a one-hour lifetime"
@@ -1793,9 +2066,11 @@ mod tests {
             dashboard: stub_dashboard(1.0),
         }));
 
-        let rebuilt = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(2.0)) })
-            .await
-            .unwrap();
+        let rebuilt = cached_dashboard(&cache, lifetime, false, || async {
+            Ok(stub_dashboard(2.0))
+        })
+        .await
+        .unwrap();
         assert_eq!(rebuilt.total_value, 2.0);
     }
 
@@ -1818,9 +2093,11 @@ mod tests {
         // Wait out the lifetime measured from when the build began, as the polling UI does.
         tokio::time::sleep(lifetime.saturating_sub(start.elapsed()) + StdDuration::from_millis(5))
             .await;
-        let rebuilt = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(2.0)) })
-            .await
-            .unwrap();
+        let rebuilt = cached_dashboard(&cache, lifetime, false, || async {
+            Ok(stub_dashboard(2.0))
+        })
+        .await
+        .unwrap();
         assert_eq!(
             rebuilt.total_value, 2.0,
             "the entry must expire a lifetime after the build started, not after it finished"
@@ -1833,19 +2110,199 @@ mod tests {
         let cache = tokio::sync::Mutex::new(None);
         let lifetime = StdDuration::from_secs(3_600);
 
-        cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(7.0)) })
-            .await
-            .unwrap();
+        cached_dashboard(&cache, lifetime, false, || async {
+            Ok(stub_dashboard(7.0))
+        })
+        .await
+        .unwrap();
         let failure = cached_dashboard(&cache, lifetime, true, || async {
             Err("Trading 212 is rate limiting requests".to_string())
         })
         .await;
         assert!(failure.is_err());
 
-        let recovered = cached_dashboard(&cache, lifetime, false, || async { Ok(stub_dashboard(9.0)) })
-            .await
-            .unwrap();
+        let recovered = cached_dashboard(&cache, lifetime, false, || async {
+            Ok(stub_dashboard(9.0))
+        })
+        .await
+        .unwrap();
         assert_eq!(recovered.total_value, 7.0, "the good snapshot must survive");
+    }
+
+    fn net_worth_snapshot(date: &str, opessocius: f64) -> NetWorthEntry {
+        NetWorthEntry {
+            date: date.to_string(),
+            net_worth: opessocius,
+            trading212: 0.0,
+            opessocius,
+            okx: 0.0,
+            trezor: 0.0,
+            bunq: 0.0,
+            t212_spending: 0.0,
+            ing: 0.0,
+            joint_account: 0.0,
+            receivables: 0.0,
+            cash: 0.0,
+            misc: 0.0,
+            savings: 0.0,
+            spending: 0.0,
+        }
+    }
+
+    fn config_with_history(month: &str, ending_balance: f64) -> Config {
+        let mut config = Config::for_tests();
+        config.opessocius_current_balance = ending_balance;
+        config.opessocius_return_start_month = "2026-08-01".to_string();
+        config.opessocius_history = vec![OpessociusHistoryRow {
+            month: month.to_string(),
+            return_percent: 2.0,
+            return_eur: 0.0,
+            deposits_eur: 0.0,
+            withdrawals_eur: 0.0,
+            ending_balance_eur: ending_balance,
+        }];
+        config
+    }
+
+    #[test]
+    fn values_the_investment_from_the_latest_net_worth_snapshot() {
+        let config = config_with_history("2026-07-01", 8_028.05);
+        let entries = vec![
+            net_worth_snapshot("2026-07-27", 8_028.05),
+            net_worth_snapshot("2026-08-12", 8_390.80),
+        ];
+        let anchor = opessocius_anchor(&config, &entries)
+            .unwrap()
+            .expect("the monitor values the investment");
+        assert_eq!(anchor.value, 8_390.80);
+        assert_eq!(anchor.date, "2026-08-12");
+        assert_eq!(anchor.month, "2026-08-01");
+        // August is already in the snapshot, so the default rate resumes in September.
+        assert_eq!(
+            opessocius_winnings_start(&config, Some(&anchor)),
+            "2026-09-01"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_the_configured_balance_without_a_usable_snapshot() {
+        let config = config_with_history("2026-07-01", 8_028.05);
+        assert!(opessocius_anchor(&config, &[]).unwrap().is_none());
+        // A category left blank is not a valuation.
+        assert!(
+            opessocius_anchor(&config, &[net_worth_snapshot("2026-08-12", 0.0)])
+                .unwrap()
+                .is_none()
+        );
+        // Nor is a snapshot the settled monthly history already speaks for.
+        assert!(
+            opessocius_anchor(&config, &[net_worth_snapshot("2026-07-27", 7_900.0)])
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            opessocius_winnings_start(&config, None),
+            config.opessocius_return_start_month
+        );
+    }
+
+    #[test]
+    fn continues_the_monthly_ledger_from_the_snapshot() {
+        let config = config_with_history("2026-07-01", 8_028.05);
+        let anchor = opessocius_anchor(&config, &[net_worth_snapshot("2026-08-12", 8_390.80)])
+            .unwrap()
+            .expect("the monitor values the investment");
+        let (history, periods) = opessocius_portfolio_history(
+            &config,
+            Some(&anchor),
+            &[],
+            &[("2026-09-01".to_string(), 167.82)],
+        )
+        .unwrap();
+        assert_eq!(
+            periods
+                .iter()
+                .map(|period| period.month.as_str())
+                .collect::<Vec<_>>(),
+            vec!["2026-07-01", "2026-08-01", "2026-09-01"]
+        );
+        for (period, ending) in periods.iter().zip([8_028.05, 8_390.80, 8_558.62]) {
+            assert!((period.ending_value - ending).abs() < 0.000_001);
+        }
+        assert!((periods[1].return_value - 362.75).abs() < 0.000_001);
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[1].timestamp, "2026-08-12T12:00:00Z");
+        assert_eq!(history[1].value, 8_390.80);
+    }
+
+    #[test]
+    fn keeps_a_deposit_out_of_the_return_it_did_not_earn() {
+        let config = config_with_history("2026-07-01", 8_028.05);
+        let anchor = opessocius_anchor(&config, &[net_worth_snapshot("2026-08-12", 8_195.40)])
+            .unwrap()
+            .expect("the monitor values the investment");
+        let deposits = vec![
+            OpessociusDeposit {
+                id: 1,
+                date: "2026-08-20".to_string(),
+                amount: 500.0,
+            },
+            OpessociusDeposit {
+                id: 2,
+                date: "2026-09-04".to_string(),
+                amount: -200.0,
+            },
+        ];
+        let (history, periods) = opessocius_portfolio_history(
+            &config,
+            Some(&anchor),
+            &deposits,
+            &[("2026-09-01".to_string(), 173.91)],
+        )
+        .unwrap();
+
+        let august = &periods[1];
+        // The snapshot moved the balance by 167.35; the 500 that landed after it is capital.
+        assert!((august.return_value - 167.35).abs() < 0.000_001);
+        assert_eq!(august.deposits, 500.0);
+        assert!((august.ending_value - 8_695.40).abs() < 0.000_001);
+        let september = &periods[2];
+        assert_eq!(september.withdrawals, 200.0);
+        assert!((september.return_value - 173.91).abs() < 0.000_001);
+        assert!((september.ending_value - 8_669.31).abs() < 0.000_001);
+        // Each dated event is plotted where it happened, and paying in raises invested capital.
+        assert_eq!(
+            history
+                .iter()
+                .map(|point| point.timestamp.as_str())
+                .collect::<Vec<_>>()
+                .as_slice()[1..3],
+            ["2026-08-12T12:00:00Z", "2026-08-20T12:00:00Z"]
+        );
+        assert_eq!(history[2].invested, config.opessocius_net_deposits + 500.0);
+    }
+
+    #[test]
+    fn counts_money_paid_in_before_the_snapshot_as_capital_the_snapshot_already_holds() {
+        let config = config_with_history("2026-07-01", 8_028.05);
+        let anchor = opessocius_anchor(&config, &[net_worth_snapshot("2026-08-12", 8_195.40)])
+            .unwrap()
+            .expect("the monitor values the investment");
+        let (_, periods) = opessocius_portfolio_history(
+            &config,
+            Some(&anchor),
+            &[OpessociusDeposit {
+                id: 1,
+                date: "2026-08-05".to_string(),
+                amount: 500.0,
+            }],
+            &[],
+        )
+        .unwrap();
+        let august = periods.last().expect("the snapshot's month");
+        // 8_028.05 + 500 paid in, and the snapshot says 8_195.40 -- so the month lost money.
+        assert!((august.return_value + 332.65).abs() < 0.000_001);
+        assert!((august.ending_value - 8_195.40).abs() < 0.000_001);
     }
 
     #[test]

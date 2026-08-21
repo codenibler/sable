@@ -90,6 +90,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_dashboard,
             commands::set_opessocius_monthly_return,
+            commands::add_opessocius_deposit,
+            commands::remove_opessocius_deposit,
             commands::list_crypto_portfolios,
             commands::add_wallet,
             commands::remove_wallet,

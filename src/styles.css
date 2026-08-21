@@ -165,6 +165,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .overview-aside { display: grid; min-width: 0; align-content: start; gap: 17px; }
 .muted { color: #686d6a; }
 .panel-heading > .muted { font-size: var(--font-caption); }
+.panel-note { margin: 0; padding: 0 23px 21px; color: #686d6a; font-size: var(--font-caption); max-width: 68ch; }
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: var(--font-small); }
 th { padding: 9px 16px; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); color: #575c59; font-size: var(--font-caption); font-weight: 600; text-align: left; text-transform: uppercase; }
@@ -432,6 +433,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .balance-card { grid-column: auto; }
   .metric-card, .metric-card:nth-child(odd) { border-top: 1px solid var(--line); border-left: 0; }
   .panel-heading, .portfolio-header { padding-inline: 16px; }
+  .panel-note { padding-inline: 16px; }
   .chart-wrap { padding-inline: 14px; }
   .wallet-list { padding-inline: 14px; }
   .asset-selector { grid-template-columns: 1fr; }

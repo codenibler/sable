@@ -8,7 +8,7 @@ use rusqlite::{Connection, MAIN_DB, OptionalExtension, params};
 
 use crate::models::{
     CashEvent, CashHistorySummary, CryptoPortfolio, DataPoint, HistorySyncState, NetWorthEntry,
-    SaveNetWorthInput, Wallet,
+    OpessociusDeposit, SaveNetWorthInput, Wallet,
 };
 
 pub fn open(path: &Path) -> Result<Connection, String> {
@@ -130,6 +130,12 @@ pub(crate) fn initialize(connection: &Connection) -> Result<(), String> {
              CREATE TABLE IF NOT EXISTS net_worth_seed_dates (
                 date TEXT PRIMARY KEY,
                 imported_at TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS opessocius_deposits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                amount_eur REAL NOT NULL,
+                created_at TEXT NOT NULL
              );",
         )
         .map_err(to_string)?;
@@ -286,6 +292,50 @@ pub fn save_net_worth_entry(
             ],
         )
         .map_err(to_string)?;
+    Ok(())
+}
+
+/// Money paid into -- or taken out of -- the manual investment since its monthly history
+/// ended. Kept as dated events rather than one running total so the month a deposit landed in
+/// can tell it apart from the month's growth.
+pub fn list_opessocius_deposits(connection: &Connection) -> Result<Vec<OpessociusDeposit>, String> {
+    let mut statement = connection
+        .prepare("SELECT id, date, amount_eur FROM opessocius_deposits ORDER BY date, id")
+        .map_err(to_string)?;
+    statement
+        .query_map([], |row| {
+            Ok(OpessociusDeposit {
+                id: row.get(0)?,
+                date: row.get(1)?,
+                amount: row.get(2)?,
+            })
+        })
+        .map_err(to_string)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(to_string)
+}
+
+pub fn add_opessocius_deposit(
+    connection: &Connection,
+    date: &str,
+    amount: f64,
+) -> Result<i64, String> {
+    connection
+        .execute(
+            "INSERT INTO opessocius_deposits(date, amount_eur, created_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![date, amount, Utc::now().to_rfc3339()],
+        )
+        .map_err(to_string)?;
+    Ok(connection.last_insert_rowid())
+}
+
+pub fn remove_opessocius_deposit(connection: &Connection, id: i64) -> Result<(), String> {
+    let removed = connection
+        .execute("DELETE FROM opessocius_deposits WHERE id = ?1", [id])
+        .map_err(to_string)?;
+    if removed == 0 {
+        return Err("That deposit is no longer recorded".to_string());
+    }
     Ok(())
 }
 
@@ -1065,13 +1115,13 @@ mod tests {
     use crate::models::{CashEvent, SaveNetWorthInput};
 
     use super::{
-        Reading, StoredSnapshot, add_wallet, carried_forward_snapshot, cash_event_count,
-        create_portfolio, crypto_position, ensure_portfolio, history_sync_state,
-        import_net_worth_history, initialize, list_net_worth_entries, list_portfolios,
-        monthly_winning, monthly_winnings, remove_net_worth_entry, save_cash_events,
-        save_crypto_snapshot, save_history_sync_state, save_monthly_winnings, save_net_worth_entry,
-        save_snapshot, simple_return_since, snapshot_baseline, source_history,
-        update_wallet_metadata,
+        Reading, StoredSnapshot, add_opessocius_deposit, add_wallet, carried_forward_snapshot,
+        cash_event_count, create_portfolio, crypto_position, ensure_portfolio, history_sync_state,
+        import_net_worth_history, initialize, list_net_worth_entries, list_opessocius_deposits,
+        list_portfolios, monthly_winning, monthly_winnings, remove_net_worth_entry,
+        remove_opessocius_deposit, save_cash_events, save_crypto_snapshot, save_history_sync_state,
+        save_monthly_winnings, save_net_worth_entry, save_snapshot, simple_return_since,
+        snapshot_baseline, source_history, update_wallet_metadata,
     };
 
     /// The stored values for a source, oldest first. Snapshots taken with an interval of zero
@@ -1565,6 +1615,29 @@ mod tests {
         .expect("period return");
         assert!((amount - 150.0).abs() < f64::EPSILON);
         assert!((percent - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn keeps_opessocius_deposits_in_date_order_and_removes_them_by_id() {
+        let database = Connection::open_in_memory().expect("in-memory database");
+        initialize(&database).expect("schema");
+        add_opessocius_deposit(&database, "2026-09-04", -200.0).unwrap();
+        let first = add_opessocius_deposit(&database, "2026-08-20", 500.0).unwrap();
+        assert_eq!(
+            list_opessocius_deposits(&database)
+                .unwrap()
+                .iter()
+                .map(|deposit| (deposit.date.clone(), deposit.amount))
+                .collect::<Vec<_>>(),
+            vec![
+                ("2026-08-20".to_string(), 500.0),
+                ("2026-09-04".to_string(), -200.0),
+            ]
+        );
+        remove_opessocius_deposit(&database, first).unwrap();
+        assert_eq!(list_opessocius_deposits(&database).unwrap().len(), 1);
+        // A second removal has nothing to delete and says so rather than reporting success.
+        assert!(remove_opessocius_deposit(&database, first).is_err());
     }
 
     #[test]

@@ -41,6 +41,8 @@ type SableApi = {
   dashboard(force?: boolean): Promise<Dashboard>;
   netWorthEntries(): Promise<NetWorthEntry[]>;
   setOpessociusMonthlyReturn(amount: number): Promise<void>;
+  addOpessociusDeposit(date: string, amount: number): Promise<number>;
+  removeOpessociusDeposit(id: number): Promise<void>;
   portfolios(): Promise<CryptoPortfolio[]>;
   addWallet(input: AddWalletInput): Promise<number>;
   removeWallet(id: number): Promise<void>;
@@ -57,6 +59,8 @@ const webApi: SableApi = {
   dashboard: () => request<Dashboard>("/api/dashboard"),
   netWorthEntries: () => request<NetWorthEntry[]>("/api/net-worth"),
   setOpessociusMonthlyReturn: readOnly,
+  addOpessociusDeposit: readOnly,
+  removeOpessociusDeposit: readOnly,
   portfolios: readOnly,
   addWallet: readOnly,
   removeWallet: readOnly,
@@ -73,6 +77,9 @@ async function loadDesktopApi(): Promise<SableApi> {
     netWorthEntries: () => invoke<NetWorthEntry[]>("list_net_worth_entries"),
     setOpessociusMonthlyReturn: (amount) =>
       invoke<void>("set_opessocius_monthly_return", { amount }),
+    addOpessociusDeposit: (date, amount) =>
+      invoke<number>("add_opessocius_deposit", { date, amount }),
+    removeOpessociusDeposit: (id) => invoke<void>("remove_opessocius_deposit", { id }),
     portfolios: () => invoke<CryptoPortfolio[]>("list_crypto_portfolios"),
     addWallet: (input) => invoke<number>("add_wallet", { input }),
     removeWallet: (id) => invoke<void>("remove_wallet", { id }),
@@ -94,6 +101,10 @@ export const api: SableApi = {
   netWorthEntries: () => transport().then((impl) => impl.netWorthEntries()),
   setOpessociusMonthlyReturn: (amount) =>
     transport().then((impl) => impl.setOpessociusMonthlyReturn(amount)),
+  addOpessociusDeposit: (date, amount) =>
+    transport().then((impl) => impl.addOpessociusDeposit(date, amount)),
+  removeOpessociusDeposit: (id) =>
+    transport().then((impl) => impl.removeOpessociusDeposit(id)),
   portfolios: () => transport().then((impl) => impl.portfolios()),
   addWallet: (input) => transport().then((impl) => impl.addWallet(input)),
   removeWallet: (id) => transport().then((impl) => impl.removeWallet(id)),

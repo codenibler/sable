@@ -17,6 +17,7 @@ import {
   Plus,
   RefreshCw,
   Square,
+  Trash2,
   WalletCards,
   X,
 } from "lucide-react";
@@ -32,7 +33,7 @@ import {
 } from "./platform";
 import { PerformanceChart } from "./components/PerformanceChart";
 import { NetWorthView } from "./components/NetWorthView";
-import type { AddWalletInput, CryptoPortfolio, Dashboard, MonitoredPortfolio, MonthlyWinnings, NetWorthEntry, PeriodReturn } from "./types";
+import type { AddWalletInput, CryptoPortfolio, Dashboard, MonitoredPortfolio, MonthlyWinnings, NetWorthEntry, OpessociusDeposit, PeriodReturn } from "./types";
 
 type View = "net-worth" | "overview" | "wallets" | `portfolio:${string}`;
 
@@ -57,6 +58,9 @@ function messageOf(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** A stored YYYY-MM-DD date is a calendar day, so it is read at midnight local rather than UTC. */
+const formatDay = (date: string) => new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+
 function App() {
   const [view, setView] = useState<View>("net-worth");
   // Hydrating from the last good payload means the phone opens with numbers rather than a
@@ -78,6 +82,7 @@ function App() {
   const [needsToken, setNeedsToken] = useState(() => isReadOnly && !readToken());
   const [walletModal, setWalletModal] = useState(false);
   const [winningsModal, setWinningsModal] = useState(false);
+  const [depositModal, setDepositModal] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fontScale, setFontScale] = useState(initialFontScale);
   const refreshing = useRef<Promise<void> | null>(null);
@@ -316,7 +321,15 @@ function App() {
         ) : dashboard && selectedPortfolio && selectedCryptoPortfolio ? (
           <CryptoPortfolioDetailView portfolio={selectedCryptoPortfolio} monitored={selectedPortfolio} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} />
         ) : dashboard && selectedPortfolio ? (
-          <PortfolioDetailView portfolio={selectedPortfolio} formatMoney={formatMoney} formatWholeMoney={formatWholeMoney} onEditReturn={isDesktop && selectedPortfolio.id === "opessocius" && dashboard.opessociusMonthlyReturn ? () => setWinningsModal(true) : undefined} />
+          <PortfolioDetailView
+            portfolio={selectedPortfolio}
+            formatMoney={formatMoney}
+            formatWholeMoney={formatWholeMoney}
+            onEditReturn={isDesktop && selectedPortfolio.id === "opessocius" && dashboard.opessociusMonthlyReturn ? () => setWinningsModal(true) : undefined}
+            deposits={selectedPortfolio.id === "opessocius" ? dashboard.opessociusDeposits : undefined}
+            onAddDeposit={isDesktop && selectedPortfolio.id === "opessocius" ? () => setDepositModal(true) : undefined}
+            onRemoveDeposit={isDesktop && selectedPortfolio.id === "opessocius" ? async (id) => { await api.removeOpessociusDeposit(id); await refresh(true); } : undefined}
+          />
         ) : dashboard && isDesktop ? (
           <Wallets
             portfolios={dashboard.portfolios}
@@ -332,6 +345,9 @@ function App() {
       )}
       {isDesktop && winningsModal && dashboard?.opessociusMonthlyReturn && (
         <WinningsModal winnings={dashboard.opessociusMonthlyReturn} currency={dashboard.currency} onClose={() => setWinningsModal(false)} onSaved={async () => { setWinningsModal(false); await refresh(true); }} />
+      )}
+      {isDesktop && depositModal && dashboard && (
+        <DepositModal currency={dashboard.currency} onClose={() => setDepositModal(false)} onSaved={async () => { setDepositModal(false); await refresh(true); }} />
       )}
     </div>
   );
@@ -483,9 +499,20 @@ function Overview({ dashboard, formatMoney, formatWholeMoney, onAddWinnings }: {
   );
 }
 
-function PortfolioDetailView({ portfolio, formatMoney, formatWholeMoney, onEditReturn }: { portfolio: MonitoredPortfolio; formatMoney: (value: number) => string; formatWholeMoney: (value: number) => string; onEditReturn?: () => void }) {
+function PortfolioDetailView({ portfolio, formatMoney, formatWholeMoney, onEditReturn, deposits, onAddDeposit, onRemoveDeposit }: { portfolio: MonitoredPortfolio; formatMoney: (value: number) => string; formatWholeMoney: (value: number) => string; onEditReturn?: () => void; deposits?: OpessociusDeposit[]; onAddDeposit?: () => void; onRemoveDeposit?: (id: number) => Promise<void> }) {
   const positive = portfolio.totalReturn >= 0;
   const latestPeriod = portfolio.periods.at(-1);
+  const [depositError, setDepositError] = useState<string | null>(null);
+  const removeDeposit = async (deposit: OpessociusDeposit) => {
+    if (!onRemoveDeposit) return;
+    if (!window.confirm(`Remove the ${deposit.amount >= 0 ? "deposit" : "withdrawal"} of ${formatMoney(Math.abs(deposit.amount))} on ${formatDay(deposit.date)}?`)) return;
+    setDepositError(null);
+    try {
+      await onRemoveDeposit(deposit.id);
+    } catch (caught) {
+      setDepositError(messageOf(caught));
+    }
+  };
   return <div className="view-stack portfolio-detail-view">
     {!portfolio.connected && portfolio.message && <div className="notice-row"><span><CircleAlert size={14} />{portfolio.message}</span></div>}
     <section className="hero-metrics portfolio-metrics">
@@ -505,6 +532,18 @@ function PortfolioDetailView({ portfolio, formatMoney, formatWholeMoney, onEditR
       <div className="table-wrap"><table><thead><tr><th>Month</th><th>Rate</th><th>Return</th><th>Deposits</th><th>Withdrawals</th><th>Ending equity</th></tr></thead><tbody>
         {[...portfolio.periods].reverse().map((period) => <tr key={period.month}><td><strong>{period.label}</strong></td><td className={period.returnValue >= 0 ? "positive-text" : "negative-text"}>{period.returnPercent.toFixed(2)}%</td><td>{formatMoney(period.returnValue)}</td><td>{period.deposits ? formatMoney(period.deposits) : "—"}</td><td>{period.withdrawals ? formatMoney(period.withdrawals) : "—"}</td><td>{formatMoney(period.endingValue)}</td></tr>)}
       </tbody></table></div>
+    </section>}
+    {deposits && (onAddDeposit || deposits.length > 0) && <section className="panel history-panel">
+      <div className="panel-heading"><div><p className="section-label">Invested capital</p><h2>{formatMoney(portfolio.investedValue)}</h2></div>{onAddDeposit && <button className="secondary-button" onClick={onAddDeposit}><Plus size={16} /> Record deposit</button>}</div>
+      {depositError && <div className="notice-row"><span><CircleAlert size={14} />{depositError}</span></div>}
+      {deposits.length ? <div className="table-wrap"><table><thead><tr><th>Date</th><th>Paid in</th><th>Taken out</th>{onRemoveDeposit && <th />}</tr></thead><tbody>
+        {[...deposits].reverse().map((deposit) => <tr key={deposit.id}>
+          <td><strong>{formatDay(deposit.date)}</strong></td>
+          <td className={deposit.amount > 0 ? "positive-text" : undefined}>{deposit.amount > 0 ? formatMoney(deposit.amount) : "—"}</td>
+          <td className={deposit.amount < 0 ? "negative-text" : undefined}>{deposit.amount < 0 ? formatMoney(-deposit.amount) : "—"}</td>
+          {onRemoveDeposit && <td><div className="ledger-actions"><button className="row-action" onClick={() => void removeDeposit(deposit)} aria-label={`Remove the record of ${formatDay(deposit.date)}`}><Trash2 size={14} /></button></div></td>}
+        </tr>)}
+      </tbody></table></div> : <p className="panel-note">Nothing paid in since the monthly history. Money recorded here raises the invested capital without ever counting as return.</p>}
     </section>}
   </div>;
 }
@@ -657,6 +696,35 @@ function WinningsModal({ winnings, currency, onClose, onSaved }: { winnings: Mon
   return <Modal title={`${winnings.label} return`} subtitle={`Sable applies a ${winnings.defaultRatePercent.toFixed(2)}% month-end return by default. Override the total return for ${winnings.label} here.`} onClose={onClose}><form onSubmit={submit}>
     <label>Total return ({currency})<input autoFocus type="number" step="0.01" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required /><small className="field-note">Saving replaces the default. A lower or negative amount is attributed across this month and is never counted twice.</small></label>
     {error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Saving…" : "Save override"}</button>
+  </form></Modal>;
+}
+
+function DepositModal({ currency, onClose, onSaved }: { currency: string; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [amount, setAmount] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const parsed = Number(amount);
+    if (!Number.isFinite(parsed) || parsed === 0) {
+      setError("Enter an amount paid in, or a negative amount for a withdrawal.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await api.addOpessociusDeposit(date, parsed);
+      await onSaved();
+    } catch (caught) {
+      setError(messageOf(caught));
+      setSaving(false);
+    }
+  };
+  return <Modal title="Record deposit" subtitle="Money paid into Opessocius raises its invested capital and its balance, and is never read as a gain." onClose={onClose}><form onSubmit={submit}>
+    <label>Date<input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></label>
+    <label>Amount ({currency})<input autoFocus type="number" step="0.01" inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0.00" required /><small className="field-note">A negative amount records a withdrawal. Dates covered by the authoritative monthly history are refused, because it already counts what was paid in then.</small></label>
+    {error && <p className="form-error">{error}</p>}<button className="primary-button submit" disabled={saving}>{saving ? "Saving…" : "Record deposit"}</button>
   </form></Modal>;
 }
 

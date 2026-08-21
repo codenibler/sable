@@ -85,6 +85,7 @@ export type Dashboard = {
   monthlyReturn: PeriodReturn;
   yearlyReturn: PeriodReturn;
   opessociusMonthlyReturn: MonthlyWinnings | null;
+  opessociusDeposits: OpessociusDeposit[];
   netContributions: number;
   historyEventCount: number;
   historyBackfillComplete: boolean;
@@ -123,6 +124,13 @@ export type PortfolioPeriod = {
   deposits: number;
   withdrawals: number;
   endingValue: number;
+};
+
+/** Money paid into the manual investment after its monthly history ended; a withdrawal is negative. */
+export type OpessociusDeposit = {
+  id: number;
+  date: string;
+  amount: number;
 };
 
 export type MonthlyWinnings = {

@@ -11,6 +11,7 @@ pub struct Dashboard {
     pub monthly_return: PeriodReturn,
     pub yearly_return: PeriodReturn,
     pub opessocius_monthly_return: Option<MonthlyWinnings>,
+    pub opessocius_deposits: Vec<OpessociusDeposit>,
     pub net_contributions: f64,
     pub history_event_count: i64,
     pub history_backfill_complete: bool,
@@ -23,6 +24,16 @@ pub struct Dashboard {
     pub portfolios: Vec<CryptoPortfolio>,
     pub monitored_portfolios: Vec<MonitoredPortfolio>,
     pub notices: Vec<String>,
+}
+
+/// Money paid into the manual investment after its monthly history ended. A withdrawal is the
+/// same record with a negative amount.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpessociusDeposit {
+    pub id: i64,
+    pub date: String,
+    pub amount: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -2,7 +2,7 @@
 # Open Sable from the app launcher: start it only if it is not already up, then focus it.
 #
 # Sable autostarts at login so its read-only phone API stays reachable, and the window rule in
-# hyprland.conf parks that window on workspace 9 with `silent` so it neither steals focus nor
+# Hyprland parks that window on workspace 10 with `silent` so it neither steals focus nor
 # drags the view across at login. It is an ordinary window on an ordinary workspace, so a
 # launcher click just has to focus it -- no special workspace, no toggle, no SUPER ALT P.
 #
